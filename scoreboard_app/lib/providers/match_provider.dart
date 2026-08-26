@@ -14,6 +14,9 @@ class MatchProvider extends ChangeNotifier {
   bool isRevealMode = false;
   int revealedTeamsCount = 0;
 
+  // --- STATO STREAMING VIDEO WEBRTC ---
+  bool isStreamingActive = false;
+
   final String _saveFileName = 'scoreboard_backup.json';
 
   Future<void> loadFromFile() async {
@@ -73,6 +76,11 @@ class MatchProvider extends ChangeNotifier {
     _autoSave();
   }
   // ------------------------------------
+
+  void setStreamingActive(bool active) {
+    isStreamingActive = active;
+    notifyListeners();
+  }
 
   void setEventName(String name) {
     eventName = name;

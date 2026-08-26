@@ -1,8 +1,11 @@
 import 'dart:convert';
+import 'dart:io'; // <-- AGGIUNTO PER I CERTIFICATI DI SICUREZZA
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
 import 'package:shelf_router/shelf_router.dart';
 import 'package:shelf_static/shelf_static.dart';
+import 'package:shelf_web_socket/shelf_web_socket.dart';
+import 'package:web_socket_channel/web_socket_channel.dart';
 import '../providers/match_provider.dart';
 
 Middleware corsHeaders() {
@@ -24,8 +27,9 @@ Future<void> startLocalServer(MatchProvider provider) async {
     final data = {
       'eventName': provider.eventName,
       'currentPage': provider.currentPage,
-      'isRevealMode': provider.isRevealMode, // Aggiunto al payload
-      'revealedTeamsCount': provider.revealedTeamsCount, // Aggiunto al payload
+      'isRevealMode': provider.isRevealMode, 
+      'revealedTeamsCount': provider.revealedTeamsCount, 
+      'isStreamingActive': provider.isStreamingActive, // Aggiunto per WebRTC
       'teams': provider.teams.asMap().entries.map((e) => {
         'id': e.key, 
         'name': e.value.name, 
@@ -40,7 +44,6 @@ Future<void> startLocalServer(MatchProvider provider) async {
     return Response.ok(jsonEncode(data), headers: {'Content-Type': 'application/json'});
   });
 
-  // --- API MODALITÀ ANNUNCIO ---
   router.post('/api/reveal/toggle', (Request request) {
     bool enable = request.url.queryParameters['enable'] == 'true';
     provider.toggleRevealMode(enable);
@@ -56,7 +59,6 @@ Future<void> startLocalServer(MatchProvider provider) async {
     provider.revealPrev();
     return Response.ok('Prev revealed');
   });
-  // -----------------------------
 
   router.post('/api/event', (Request request) {
     provider.setEventName(request.url.queryParameters['name'] ?? 'Evento');
@@ -126,9 +128,55 @@ Future<void> startLocalServer(MatchProvider provider) async {
     return Response.ok('Tutto resettato');
   });
 
+  final List<WebSocketChannel> activeChannels = [];
+
+  router.get('/ws', webSocketHandler((WebSocketChannel webSocket) {
+    activeChannels.add(webSocket);
+    print("Nuovo client WebSocket connesso per il signaling WebRTC.");
+
+    webSocket.stream.listen((message) {
+      try {
+        final decoded = jsonDecode(message);
+        if (decoded['offer'] != null) {
+          provider.setStreamingActive(true);
+        } else if (decoded['stop'] == true) {
+          provider.setStreamingActive(false);
+        }
+      } catch (e) {
+        print("Errore nel parsing del messaggio di signaling: $e");
+      }
+
+      // Inoltra il messaggio di signaling a tutti gli altri client connessi
+      for (var channel in activeChannels) {
+        if (channel != webSocket) {
+          channel.sink.add(message);
+        }
+      }
+    }, onDone: () {
+      activeChannels.remove(webSocket);
+      print("Client WebSocket disconnesso.");
+    }, onError: (err) {
+      activeChannels.remove(webSocket);
+      print("Errore WebSocket: $err");
+    });
+  }));
+
   final staticHandler = createStaticHandler('build/web', defaultDocument: 'index.html');
   final cascade = Cascade().add(router.call).add(staticHandler);
   
   final handler = const Pipeline().addMiddleware(corsHeaders()).addHandler(cascade.handler);
-  await io.serve(handler, '0.0.0.0', 8080);
+  
+  // --- NUOVA CONFIGURAZIONE HTTPS ---
+  try {
+    final securityContext = SecurityContext()
+      ..useCertificateChain('certs/cert.pem')
+      ..usePrivateKey('certs/key.pem');
+
+    print('🟢 Server in ascolto su HTTPS e WSS (Porta 8080)');
+    await io.serve(handler, '0.0.0.0', 8080, securityContext: securityContext);
+  } catch (e) {
+    // Fallback su HTTP normale se i certificati non vengono trovati
+    print('⚠️ Certificati SSL non trovati. Server in ascolto su HTTP normale.');
+    await io.serve(handler, '0.0.0.0', 8080);
+  }
 }

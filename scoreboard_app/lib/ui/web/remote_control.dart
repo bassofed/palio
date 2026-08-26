@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'web_helper.dart';
 
 class RemoteControlScreen extends StatefulWidget {
   const RemoteControlScreen({super.key});
@@ -150,6 +151,15 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                   child: Text(g['name'])
                 );
               }),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                icon: const Icon(Icons.videocam),
+                label: const Text('🔴 Streaming Live'),
+                onPressed: () {
+                  // Reindirizza l'utente alla pagina dedicata per la trasmissione
+                  redirectToBroadcaster(Uri.base.origin);
+                },
+              ),
             ],
           ),
           const Divider(height: 30, thickness: 2),

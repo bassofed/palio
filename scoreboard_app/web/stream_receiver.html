@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Receiver - Maxischermo Stream</title>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: transparent;
+      overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: none;
+      border-radius: 20px;
+    }
+  </style>
+</head>
+<body>
+
+<video id="remoteVideo" autoplay playsinline muted></video>
+
+<script>
+  let peerConnection = null;
+  let socket = null;
+  const remoteVideo = document.getElementById('remoteVideo');
+
+  const rtcConfig = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' }
+    ]
+  };
+
+  function initWebSocket() {
+    // Si collega alla stessa porta dell'host (8080) su cui gira l'app desktop
+    const wsUrl = `ws://${window.location.host}/ws`;
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      console.log('Connessione WebSocket (Receiver) stabilita.');
+    };
+
+    socket.onmessage = async (event) => {
+      const message = JSON.parse(event.data);
+
+      if (message.offer) {
+        console.log('Ricevuta offerta WebRTC.');
+        await startReceiver(message.offer);
+      }
+
+      if (message.candidate && peerConnection) {
+        console.log('Ricevuto candidato ICE.');
+        try {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+        } catch (e) {
+          console.error("Errore nell'aggiunta del candidato ICE:", e);
+        }
+      }
+
+      if (message.stop) {
+        console.log('Streaming terminato dal Broadcaster.');
+        stopReceiver();
+      }
+    };
+
+    socket.onclose = () => {
+      console.log('WebSocket chiusa. Riconnessione...');
+      setTimeout(initWebSocket, 2000);
+    };
+  }
+
+  async function startReceiver(offer) {
+    if (peerConnection) {
+      peerConnection.close();
+    }
+
+    peerConnection = new RTCPeerConnection(rtcConfig);
+
+    peerConnection.ontrack = (event) => {
+      console.log('Traccia video remota impostata.');
+      if (event.streams && event.streams[0]) {
+        remoteVideo.srcObject = event.streams[0];
+        remoteVideo.style.display = 'block';
+      }
+    };
+
+    peerConnection.onicecandidate = (event) => {
+      if (event.candidate && socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ candidate: event.candidate }));
+      }
+    };
+
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ answer: answer }));
+    }
+  }
+
+  function stopReceiver() {
+    remoteVideo.srcObject = null;
+    remoteVideo.style.display = 'none';
+    if (peerConnection) {
+      peerConnection.close();
+      peerConnection = null;
+    }
+  }
+
+  initWebSocket();
+</script>
+</body>
+</html>

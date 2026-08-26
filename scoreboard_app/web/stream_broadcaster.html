@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Broadcaster - Scoreboard Stream</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #121212;
+      color: #ffffff;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    .container {
+      width: 90%;
+      max-width: 500px;
+      text-align: center;
+      background: #1e1e1e;
+      padding: 20px;
+      border-radius: 15px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    }
+    h2 {
+      margin-top: 0;
+      color: #3b82f6;
+    }
+    video {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      background: #000000;
+      border-radius: 10px;
+      object-fit: cover;
+      margin-bottom: 20px;
+      transform: scaleX(-1); /* Specchia per l'anteprima utente */
+    }
+    .btn {
+      width: 100%;
+      padding: 15px;
+      font-size: 18px;
+      font-weight: bold;
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      margin-bottom: 10px;
+      transition: background-color 0.2s;
+    }
+    .btn-start {
+      background-color: #10b981;
+      color: white;
+    }
+    .btn-start:hover {
+      background-color: #059669;
+    }
+    .btn-stop {
+      background-color: #ef4444;
+      color: white;
+      display: none;
+    }
+    .btn-stop:hover {
+      background-color: #dc2626;
+    }
+    .btn-back {
+      background-color: #4b5563;
+      color: white;
+    }
+    .status {
+      margin-bottom: 20px;
+      font-style: italic;
+      color: #9ca3af;
+    }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>🔴 LIVE VIDEO STREAMING</h2>
+  <div class="status" id="statusLabel">Pronto ad avviare lo streaming</div>
+  <video id="previewVideo" autoplay playsinline muted></video>
+
+  <button class="btn btn-start" id="startBtn" onclick="startStreaming()">Avvia Streaming</button>
+  <button class="btn btn-stop" id="stopBtn" onclick="stopStreaming()">Interrompi Streaming</button>
+  <button class="btn btn-back" onclick="window.history.back()">Indietro al Telecomando</button>
+</div>
+
+<script>
+  let localStream = null;
+  let peerConnection = null;
+  let socket = null;
+
+  const rtcConfig = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' }
+    ]
+  };
+
+  const statusLabel = document.getElementById('statusLabel');
+  const startBtn = document.getElementById('startBtn');
+  const stopBtn = document.getElementById('stopBtn');
+  const previewVideo = document.getElementById('previewVideo');
+
+  function updateStatus(text, color = '#9ca3af') {
+    statusLabel.innerText = text;
+    statusLabel.style.color = color;
+  }
+
+  function initWebSocket() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws`;
+    
+    socket = new WebSocket(wsUrl);
+
+    socket.onopen = () => {
+      console.log('Connessione WebSocket di Signaling stabilita.');
+    };
+
+    socket.onmessage = async (event) => {
+      const message = JSON.parse(event.data);
+
+      if (message.answer && peerConnection) {
+        console.log('Ricevuta Answer SDP dal Maxischermo.');
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(message.answer));
+        updateStatus('Connessione stabilita con il Maxischermo! Streaming in corso...', '#10b981');
+      }
+
+      if (message.candidate && peerConnection) {
+        console.log('Ricevuto candidato ICE remoto.');
+        try {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(message.candidate));
+        } catch (e) {
+          console.error("Errore nell'aggiunta del candidato ICE:", e);
+        }
+      }
+    };
+
+    socket.onclose = () => {
+      console.log('Connessione WebSocket chiusa. Riconnessione...');
+      updateStatus('Disconnesso dal server. Riconnessione...', '#ef4444');
+      setTimeout(initWebSocket, 2000);
+    };
+  }
+
+  // Inizializza subito la WebSocket
+  initWebSocket();
+
+  async function startStreaming() {
+    updateStatus('Acquisizione fotocamera in corso...');
+    try {
+      localStream = await navigator.mediaDevices.getUserMedia({
+        video: { 
+          facingMode: 'environment', // Fotocamera posteriore
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+
+      previewVideo.srcObject = localStream;
+      
+      peerConnection = new RTCPeerConnection(rtcConfig);
+
+      // Aggiungiamo le tracce locali
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+
+      // Gestione candidati ICE
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate && socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ candidate: event.candidate }));
+        }
+      };
+
+      // Crea l'Offer
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ offer: offer }));
+        updateStatus('Offerta inviata al Maxischermo. In attesa di risposta...', '#fbbf24');
+      } else {
+        throw new Error('Connessione WebSocket non pronta.');
+      }
+
+      startBtn.style.display = 'none';
+      stopBtn.style.display = 'block';
+
+    } catch (error) {
+      console.error(error);
+      updateStatus('Errore nell\'avvio dello streaming: ' + error.message, '#ef4444');
+    }
+  }
+
+  function stopStreaming() {
+    updateStatus('Interruzione dello streaming...');
+    
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+      localStream = null;
+    }
+
+    if (previewVideo.srcObject) {
+      previewVideo.srcObject = null;
+    }
+
+    if (peerConnection) {
+      peerConnection.close();
+      peerConnection = null;
+    }
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ stop: true }));
+    }
+
+    startBtn.style.display = 'block';
+    stopBtn.style.display = 'none';
+    updateStatus('Pronto ad avviare lo streaming', '#9ca3af');
+  }
+</script>
+</body>
+</html>

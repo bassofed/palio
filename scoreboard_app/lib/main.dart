@@ -1,17 +1,27 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
+// Nuovi import per WebRTC e WebSocket
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:web_socket_channel/io.dart';
+
 import 'providers/match_provider.dart';
 import 'server/local_server.dart';
 import 'models/game.dart';
-import 'ui/web/remote_control.dart'; 
+import 'ui/web/remote_control.dart';
+import 'ui/web/web_helper.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   if (kIsWeb) {
+    registerIframeViewFactory();
+
     runApp(const MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Telecomando',
@@ -83,7 +93,6 @@ class ScoreboardApp extends StatelessWidget {
           }
 
           if (i < state.revealedTeamsCount) {
-            // Passiamo un Key univoco per assicurarci che l'animazione parta ogni volta che il widget viene "scoperto"
             teamCardWidgets.add(Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10.0), child: _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, key: ValueKey('team_${originalIndex}_revealed')))));
           } else {
             int rank = state.teams.length - i; 
@@ -114,51 +123,62 @@ class ScoreboardApp extends StatelessWidget {
             colors: [Color(0xFF0F2027), Color(0xFF203A43), Color(0xFF2C5364)],
           ),
         ),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(30.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                FittedBox(
-                  child: Text(
-                    mainTitle,
-                    style: const TextStyle(fontSize: 80, color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 3, shadows: [Shadow(color: Colors.black54, blurRadius: 20, offset: Offset(0, 5))]),
-                  ),
-                ),
-                FittedBox(
-                  child: Text(
-                    subtitle,
-                    style: const TextStyle(fontSize: 40, color: Colors.amberAccent, fontWeight: FontWeight.bold, letterSpacing: 5),
-                  ),
-                ),
-                const SizedBox(height: 60),
-                
-                if (state.teams.isEmpty)
-                  const Text("In attesa delle squadre...", style: TextStyle(color: Colors.white54, fontSize: 30))
-                else
-                  Expanded(
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: teamCardWidgets, 
+        child: Stack(
+          children: [
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.all(30.0),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    FittedBox(
+                      child: Text(
+                        mainTitle,
+                        style: const TextStyle(fontSize: 80, color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 3, shadows: [Shadow(color: Colors.black54, blurRadius: 20, offset: Offset(0, 5))]),
+                      ),
                     ),
-                  ),
-              ],
+                    FittedBox(
+                      child: Text(
+                        subtitle,
+                        style: const TextStyle(fontSize: 40, color: Colors.amberAccent, fontWeight: FontWeight.bold, letterSpacing: 5),
+                      ),
+                    ),
+                    const SizedBox(height: 60),
+                    
+                    if (state.teams.isEmpty)
+                      const Text("In attesa delle squadre...", style: TextStyle(color: Colors.white54, fontSize: 30))
+                    else
+                      Expanded(
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: teamCardWidgets, 
+                        ),
+                      ),
+                  ],
+                ),
+              ),
             ),
-          ),
+            
+            // L'OVERLAY VIDEO (Sempre in ascolto, ma visibile solo se attivo)
+            Positioned.fill(
+              child: Offstage(
+                offstage: !state.isStreamingActive,
+                child: const WebRTCReceiverWidget(),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  // Aggiungiamo un parametro Key opzionale per forzare il rebuilding
   Widget _buildTeamCard(String name, String colorHex, int score, String? partial, bool showJolly, {Key? key}) {
     Color teamColor = Colors.white;
     try { teamColor = Color(int.parse(colorHex.substring(1), radix: 16) + 0xFF000000); } catch (e) {}
 
     return Container(
-      key: key, // Assegniamo la key al container principale
+      key: key, 
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.4),
@@ -204,15 +224,9 @@ class ScoreboardApp extends StatelessWidget {
           Expanded(
             child: FittedBox(
               child: TweenAnimationBuilder<int>(
-                // TRUCCO: Impostiamo SEMPRE begin a 0.
-                // Quando il widget viene disegnato per la prima volta (es. rivelato), partirà da 0 e andrà al punteggio reale.
-                // Se aggiorni il punteggio dal telecomando senza nascondere la squadra, Flutter (essendo intelligente) 
-                // ottimizzerà l'animazione e scalerà dal numero visibile precedente al nuovo numero, 
-                // mantenendo la fluidità durante l'assegnazione dei punti live.
                 tween: IntTween(begin: 0, end: score),
-                // Aumentiamo leggermente la durata a 1.2 secondi per enfatizzare l'effetto "contatore che sale"
                 duration: const Duration(milliseconds: 1200), 
-                curve: Curves.easeOutCubic, // Aggiungiamo una curva per rallentare dolcemente alla fine
+                curve: Curves.easeOutCubic, 
                 builder: (context, value, child) {
                   if (value == 0) return const SizedBox.shrink(); 
                   return Text(value.toString(), style: const TextStyle(fontSize: 250, fontWeight: FontWeight.w900, color: Colors.white));
@@ -241,6 +255,157 @@ class ScoreboardApp extends StatelessWidget {
           )
         )
       )
+    );
+  }
+}
+// =======================================================
+// WIDGET RICEVITORE WEBRTC (NATIVO DESKTOP)
+// =======================================================
+class WebRTCReceiverWidget extends StatefulWidget {
+  const WebRTCReceiverWidget({super.key});
+
+  @override
+  State<WebRTCReceiverWidget> createState() => _WebRTCReceiverWidgetState();
+}
+
+class _WebRTCReceiverWidgetState extends State<WebRTCReceiverWidget> {
+  final RTCVideoRenderer _renderer = RTCVideoRenderer();
+  RTCPeerConnection? _peerConnection;
+  IOWebSocketChannel? _signalingChannel;
+  
+  // Buffer per salvare i candidati di rete che arrivano troppo presto
+  final List<RTCIceCandidate> _candidateBuffer = []; 
+
+  @override
+  void initState() {
+    super.initState();
+    _initRenderer();
+    _connectSignaling();
+  }
+
+  Future<void> _initRenderer() async {
+    await _renderer.initialize();
+    print("📺 Video Renderer inizializzato sul Desktop");
+  }
+
+  void _connectSignaling() {
+    final customClient = HttpClient()
+      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+
+    print("🔌 Tentativo di connessione al WebSocket locale...");
+    WebSocket.connect('wss://127.0.0.1:8080/ws', customClient: customClient).then((ws) {
+      print("✅ Connesso al WebSocket del Signaling Server!");
+      _signalingChannel = IOWebSocketChannel(ws);
+      
+      _signalingChannel!.stream.listen((message) {
+        _handleSignalingMessage(message);
+      });
+      
+    }).catchError((e) {
+      print("❌ Errore connessione WebSocket dal Desktop: $e");
+    });
+  }
+
+  Future<void> _handleSignalingMessage(String message) async {
+    try {
+      final data = jsonDecode(message);
+
+      if (data['offer'] != null) {
+        print("📩 RICEVUTA OFFERTA dal telefono.");
+        await _createPeerConnection();
+        
+        var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
+        await _peerConnection!.setRemoteDescription(offer);
+        print("✅ Remote Description impostata.");
+        
+        var answer = await _peerConnection!.createAnswer();
+        await _peerConnection!.setLocalDescription(answer);
+        print("✅ Local Description (Risposta) creata.");
+        
+        _signalingChannel?.sink.add(jsonEncode({'answer': answer.toMap()}));
+        print("📤 INVIATA RISPOSTA al telefono.");
+
+        // Svuota il buffer dei candidati arrivati in anticipo
+        for (var cand in _candidateBuffer) {
+          await _peerConnection!.addCandidate(cand);
+          print("🧊 Aggiunto Ice Candidate dal buffer.");
+        }
+        _candidateBuffer.clear();
+      } 
+      else if (data['candidate'] != null) {
+        var candidateMap = data['candidate'];
+        var candidate = RTCIceCandidate(
+            candidateMap['candidate'], candidateMap['sdpMid'], candidateMap['sdpMLineIndex']);
+        
+        if (_peerConnection != null) {
+          await _peerConnection!.addCandidate(candidate);
+          print("🧊 Aggiunto Ice Candidate live.");
+        } else {
+          _candidateBuffer.add(candidate);
+          print("🧊 Ice Candidate messo in buffer (peer connection non ancora pronta).");
+        }
+      }
+    } catch (e) {
+      print('❌ Errore parsing WebRTC: $e');
+    }
+  }
+
+  Future<void> _createPeerConnection() async {
+    if (_peerConnection != null) return;
+    print("⚙️ Creazione della PeerConnection...");
+
+    Map<String, dynamic> configuration = {
+      "iceServers": [
+        {"url": "stun:stun.l.google.com:19302"},
+      ]
+    };
+
+    _peerConnection = await createPeerConnection(configuration);
+
+    // Usa onAddStream, che spesso è più affidabile su Desktop
+    _peerConnection!.onAddStream = (MediaStream stream) {
+      print("🎥 FLUSSO VIDEO IN ARRIVO! Tracce video trovate: ${stream.getVideoTracks().length}");
+      setState(() {
+        _renderer.srcObject = stream;
+      });
+    };
+
+    // Fallback: ascoltiamo anche onTrack per sicurezza
+    _peerConnection!.onTrack = (RTCTrackEvent event) {
+      print("🎥 TRACK IN ARRIVO: ${event.track.kind}");
+      if (event.track.kind == 'video' && event.streams.isNotEmpty) {
+        setState(() {
+          _renderer.srcObject = event.streams[0];
+        });
+      }
+    };
+
+    _peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
+      _signalingChannel?.sink.add(jsonEncode({'candidate': candidate.toMap()}));
+    };
+
+    _peerConnection!.onIceConnectionState = (RTCIceConnectionState state) {
+      print('🔄 Stato Connessione WebRTC: $state');
+    };
+  }
+
+  @override
+  void dispose() {
+    print("🧹 Pulizia risorse WebRTC...");
+    _renderer.dispose();
+    _peerConnection?.dispose();
+    _signalingChannel?.sink.close();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black,
+      child: RTCVideoView(
+        _renderer,
+        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+      ),
     );
   }
 }
