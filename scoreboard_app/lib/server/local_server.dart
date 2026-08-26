@@ -24,6 +24,8 @@ Future<void> startLocalServer(MatchProvider provider) async {
     final data = {
       'eventName': provider.eventName,
       'currentPage': provider.currentPage,
+      'isRevealMode': provider.isRevealMode, // Aggiunto al payload
+      'revealedTeamsCount': provider.revealedTeamsCount, // Aggiunto al payload
       'teams': provider.teams.asMap().entries.map((e) => {
         'id': e.key, 
         'name': e.value.name, 
@@ -38,21 +40,36 @@ Future<void> startLocalServer(MatchProvider provider) async {
     return Response.ok(jsonEncode(data), headers: {'Content-Type': 'application/json'});
   });
 
+  // --- API MODALITÀ ANNUNCIO ---
+  router.post('/api/reveal/toggle', (Request request) {
+    bool enable = request.url.queryParameters['enable'] == 'true';
+    provider.toggleRevealMode(enable);
+    return Response.ok('Modalità annuncio toggled');
+  });
+
+  router.post('/api/reveal/next', (Request request) {
+    provider.revealNext();
+    return Response.ok('Next revealed');
+  });
+
+  router.post('/api/reveal/prev', (Request request) {
+    provider.revealPrev();
+    return Response.ok('Prev revealed');
+  });
+  // -----------------------------
+
   router.post('/api/event', (Request request) {
     provider.setEventName(request.url.queryParameters['name'] ?? 'Evento');
     return Response.ok('Nome evento aggiornato');
   });
 
   router.post('/api/game', (Request request) {
-    final name = request.url.queryParameters['name'] ?? 'Nuovo Gioco';
-    provider.addGame(name);
+    provider.addGame(request.url.queryParameters['name'] ?? 'Nuovo Gioco');
     return Response.ok('Gioco aggiunto');
   });
 
   router.post('/api/team', (Request request) {
-    final name = request.url.queryParameters['name'] ?? 'Nuova Squadra';
-    final color = request.url.queryParameters['color'] ?? '#FFFFFF';
-    provider.addTeam(name, color);
+    provider.addTeam(request.url.queryParameters['name'] ?? 'Nuova Squadra', request.url.queryParameters['color'] ?? '#FFFFFF');
     return Response.ok('Squadra aggiunta');
   });
 

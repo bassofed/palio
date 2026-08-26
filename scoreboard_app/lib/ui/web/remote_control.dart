@@ -15,6 +15,9 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   List<dynamic> games = [];
   String eventName = '';
   String activePage = 'totals';
+  
+  bool isRevealMode = false;
+  int revealedTeamsCount = 0;
 
   Color selectedTeamColor = Colors.white;
   
@@ -41,6 +44,8 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
           eventName = data['eventName'];
           eventNameCtrl.text = eventName;
           activePage = data['currentPage'];
+          isRevealMode = data['isRevealMode'] ?? false;
+          revealedTeamsCount = data['revealedTeamsCount'] ?? 0;
           teams = data['teams'];
           games = data['games'];
           
@@ -68,7 +73,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
     try {
       await http.post(url);
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Azione eseguita!'), duration: Duration(milliseconds: 300)));
-      if (endpoint.contains('/team') || endpoint.contains('/game') || endpoint.contains('/reset') || endpoint.contains('/event') || endpoint.contains('/navigate') || endpoint.contains('/jolly')) {
+      if (endpoint.contains('/team') || endpoint.contains('/game') || endpoint.contains('/reset') || endpoint.contains('/event') || endpoint.contains('/navigate') || endpoint.contains('/jolly') || endpoint.contains('/reveal')) {
         await Future.delayed(const Duration(milliseconds: 300));
         fetchState();
       }
@@ -149,6 +154,46 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
           ),
           const Divider(height: 30, thickness: 2),
 
+          // --- MODALITÀ ANNUNCIO (SUSPENSE) ---
+          if (teams.isNotEmpty) ...[
+            Card(
+              color: Colors.purple.shade50,
+              shape: RoundedRectangleBorder(side: const BorderSide(color: Colors.purple, width: 2), borderRadius: BorderRadius.circular(10)),
+              child: Padding(
+                padding: const EdgeInsets.all(12.0),
+                child: Column(
+                  children: [
+                    SwitchListTile(
+                      title: const Text('🎭 MODALITÀ ANNUNCIO (Classifica Rivelata)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
+                      subtitle: const Text('Nasconde le squadre e le riordina dall\'ultima alla prima.'),
+                      value: isRevealMode,
+                      activeColor: Colors.purple,
+                      onChanged: (val) => sendCommand('/api/reveal/toggle?enable=$val'),
+                    ),
+                    if (isRevealMode)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.black),
+                            icon: const Icon(Icons.visibility_off), label: const Text('Nascondi (-1)'),
+                            onPressed: () => sendCommand('/api/reveal/prev')
+                          ),
+                          Text('$revealedTeamsCount / ${teams.length}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white),
+                            icon: const Icon(Icons.visibility), label: const Text('Rivela (+1)'),
+                            onPressed: () => sendCommand('/api/reveal/next')
+                          ),
+                        ],
+                      )
+                  ],
+                ),
+              ),
+            ),
+            const Divider(height: 30, thickness: 2),
+          ],
+
           Text(isTotalsView ? '🛑 MODIFICHE DISABILITATE NEI TOTALI' : '🎮 ASSEGNA PUNTI E PARZIALI', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: isTotalsView ? Colors.red : Colors.black)),
           if (games.isNotEmpty) DropdownButton<int>(
             value: currentGameIndex,
@@ -183,7 +228,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         Expanded(child: Text(team['name'], style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))),
-                        
                         Row(
                           children: [
                             ElevatedButton(
@@ -203,7 +247,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                               child: Text(hasUsedJolly ? 'Jolly Usato' : '🌟 Jolly')
                             ),
                             const SizedBox(width: 8),
-                            // ECCO IL CESTINO RIPRISTINATO
                             IconButton(
                               icon: const Icon(Icons.delete, color: Colors.red), 
                               onPressed: () => confirmAndSend('Elimina Squadra', 'Vuoi eliminare ${team['name']}?', '/api/delete/team?id=$teamId')
