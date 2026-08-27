@@ -43,6 +43,10 @@ jobs:
           # Crea la cartella "build/web" dentro l'eseguibile Linux e ci copia il telecomando
           mkdir -p build/linux/x64/release/bundle/build/web
           cp -r build/web/* build/linux/x64/release/bundle/build/web/
+          
+          # --- NOVITÀ: Genera i certificati SSL per Linux ---
+          mkdir -p build/linux/x64/release/bundle/certs
+          openssl req -x509 -newkey rsa:4096 -keyout build/linux/x64/release/bundle/certs/key.pem -out build/linux/x64/release/bundle/certs/cert.pem -sha256 -days 365 -nodes -subj "/CN=localhost"
 
       - name: Carica l'Artefatto (Scarica da GitHub)
         uses: actions/upload-artifact@v4
@@ -81,6 +85,10 @@ jobs:
           # Crea la cartella "build\web" dentro l'eseguibile Windows e ci copia il telecomando
           New-Item -ItemType Directory -Force -Path build\windows\x64\runner\Release\build\web
           Copy-Item -Path build\web\* -Destination build\windows\x64\runner\Release\build\web\ -Recurse
+          
+          # --- NOVITÀ: Genera i certificati SSL per Windows ---
+          New-Item -ItemType Directory -Force -Path build\windows\x64\runner\Release\certs
+          openssl req -x509 -newkey rsa:4096 -keyout build\windows\x64\runner\Release\certs\key.pem -out build\windows\x64\runner\Release\certs\cert.pem -sha256 -days 365 -nodes -subj "//CN=localhost"
 
       - name: Carica l'Artefatto (Scarica da GitHub)
         uses: actions/upload-artifact@v4
