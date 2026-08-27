@@ -1,0 +1,89 @@
+name: Compila Tabellone (Linux & Windows)
+
+# Questo workflow si avvia automaticamente quando fai un "push" sul main
+# o manualmente dal pannello "Actions" di GitHub.
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  # ==========================================
+  # JOB 1: COMPILAZIONE LINUX
+  # ==========================================
+  build-linux:
+    runs-on: ubuntu-latest # Usa un server Linux di GitHub
+
+    steps:
+      - name: Scarica il codice repository
+        uses: actions/checkout@v4
+
+      - name: Installa le dipendenze di sistema Linux
+        run: |
+          sudo apt-get update -y
+          # Installa i pacchetti necessari per Flutter Desktop e WebRTC (incluso libpulse-dev)
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libpulse-dev
+
+      - name: Installa Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Scarica dipendenze Flutter
+        run: flutter pub get
+
+      - name: Compila il Telecomando (Web)
+        run: flutter build web
+
+      - name: Compila il Tabellone (Linux Desktop)
+        run: flutter build linux --release
+
+      - name: Prepara il pacchetto finale
+        run: |
+          # Crea la cartella "build/web" dentro l'eseguibile Linux e ci copia il telecomando
+          mkdir -p build/linux/x64/release/bundle/build/web
+          cp -r build/web/* build/linux/x64/release/bundle/build/web/
+
+      - name: Carica l'Artefatto (Scarica da GitHub)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tabellone_Linux
+          path: build/linux/x64/release/bundle/
+
+
+  # ==========================================
+  # JOB 2: COMPILAZIONE WINDOWS
+  # ==========================================
+  build-windows:
+    runs-on: windows-latest # Usa un server Windows di GitHub
+
+    steps:
+      - name: Scarica il codice repository
+        uses: actions/checkout@v4
+
+      - name: Installa Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Scarica dipendenze Flutter
+        run: flutter pub get
+
+      - name: Compila il Telecomando (Web)
+        run: flutter build web
+
+      - name: Compila il Tabellone (Windows Desktop)
+        run: flutter build windows --release
+
+      - name: Prepara il pacchetto finale (PowerShell)
+        shell: pwsh
+        run: |
+          # Crea la cartella "build\web" dentro l'eseguibile Windows e ci copia il telecomando
+          New-Item -ItemType Directory -Force -Path build\windows\x64\runner\Release\build\web
+          Copy-Item -Path build\web\* -Destination build\windows\x64\runner\Release\build\web\ -Recurse
+
+      - name: Carica l'Artefatto (Scarica da GitHub)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tabellone_Windows
+          path: build\windows\x64\runner\Release\
