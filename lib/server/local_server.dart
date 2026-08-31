@@ -1,5 +1,5 @@
 import 'dart:convert';
-import 'dart:io'; // <-- AGGIUNTO PER I CERTIFICATI DI SICUREZZA
+import 'dart:io'; 
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart' as io;
 import 'package:shelf_router/shelf_router.dart';
@@ -29,7 +29,11 @@ Future<void> startLocalServer(MatchProvider provider) async {
       'currentPage': provider.currentPage,
       'isRevealMode': provider.isRevealMode, 
       'revealedTeamsCount': provider.revealedTeamsCount, 
-      'isStreamingActive': provider.isStreamingActive, // Aggiunto per WebRTC
+      'isStreamingActive': provider.isStreamingActive, 
+      // Dati Countdown:
+      'isTimerVisible': provider.isTimerVisible,
+      'timerSeconds': provider.timerSeconds,
+      'isTimerRunning': provider.isTimerRunning,
       'teams': provider.teams.asMap().entries.map((e) => {
         'id': e.key, 
         'name': e.value.name, 
@@ -43,6 +47,36 @@ Future<void> startLocalServer(MatchProvider provider) async {
     };
     return Response.ok(jsonEncode(data), headers: {'Content-Type': 'application/json'});
   });
+
+  // --- API TIMER ---
+  router.post('/api/timer/visibility', (Request request) {
+    bool show = request.url.queryParameters['show'] == 'true';
+    provider.toggleTimerVisibility(show);
+    return Response.ok('Visibility updated');
+  });
+
+  router.post('/api/timer/start', (Request request) {
+    provider.startTimer();
+    return Response.ok('Timer started');
+  });
+
+  router.post('/api/timer/stop', (Request request) {
+    provider.stopTimer();
+    return Response.ok('Timer stopped');
+  });
+
+  router.post('/api/timer/reset', (Request request) {
+    provider.resetTimer();
+    return Response.ok('Timer reset');
+  });
+
+  router.post('/api/timer/set', (Request request) {
+    int m = int.tryParse(request.url.queryParameters['m'] ?? '0') ?? 0;
+    int s = int.tryParse(request.url.queryParameters['s'] ?? '0') ?? 0;
+    provider.setTimer(m, s);
+    return Response.ok('Timer set');
+  });
+  // -----------------
 
   router.post('/api/reveal/toggle', (Request request) {
     bool enable = request.url.queryParameters['enable'] == 'true';
@@ -132,8 +166,6 @@ Future<void> startLocalServer(MatchProvider provider) async {
 
   router.get('/ws', webSocketHandler((WebSocketChannel webSocket) {
     activeChannels.add(webSocket);
-    print("Nuovo client WebSocket connesso per il signaling WebRTC.");
-
     webSocket.stream.listen((message) {
       try {
         final decoded = jsonDecode(message);
@@ -142,11 +174,8 @@ Future<void> startLocalServer(MatchProvider provider) async {
         } else if (decoded['stop'] == true) {
           provider.setStreamingActive(false);
         }
-      } catch (e) {
-        print("Errore nel parsing del messaggio di signaling: $e");
-      }
+      } catch (e) {}
 
-      // Inoltra il messaggio di signaling a tutti gli altri client connessi
       for (var channel in activeChannels) {
         if (channel != webSocket) {
           channel.sink.add(message);
@@ -154,10 +183,8 @@ Future<void> startLocalServer(MatchProvider provider) async {
       }
     }, onDone: () {
       activeChannels.remove(webSocket);
-      print("Client WebSocket disconnesso.");
     }, onError: (err) {
       activeChannels.remove(webSocket);
-      print("Errore WebSocket: $err");
     });
   }));
 
@@ -166,7 +193,6 @@ Future<void> startLocalServer(MatchProvider provider) async {
   
   final handler = const Pipeline().addMiddleware(corsHeaders()).addHandler(cascade.handler);
   
-  // --- NUOVA CONFIGURAZIONE HTTPS ---
   try {
     final securityContext = SecurityContext()
       ..useCertificateChain('certs/cert.pem')
@@ -175,7 +201,6 @@ Future<void> startLocalServer(MatchProvider provider) async {
     print('🟢 Server in ascolto su HTTPS e WSS (Porta 8080)');
     await io.serve(handler, '0.0.0.0', 8080, securityContext: securityContext);
   } catch (e) {
-    // Fallback su HTTP normale se i certificati non vengono trovati
     print('⚠️ Certificati SSL non trovati. Server in ascolto su HTTP normale.');
     await io.serve(handler, '0.0.0.0', 8080);
   }

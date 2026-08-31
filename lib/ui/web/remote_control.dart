@@ -1,7 +1,7 @@
 import 'dart:convert';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
-import 'web_helper.dart';
 
 class RemoteControlScreen extends StatefulWidget {
   const RemoteControlScreen({super.key});
@@ -20,11 +20,20 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   bool isRevealMode = false;
   int revealedTeamsCount = 0;
 
+  // Dati Countdown
+  bool isTimerVisible = false;
+  int timerSeconds = 0;
+  bool isTimerRunning = false;
+  Timer? _pollingTimer;
+
   Color selectedTeamColor = Colors.white;
   
   final TextEditingController eventNameCtrl = TextEditingController();
   final TextEditingController newTeamNameCtrl = TextEditingController();
   final TextEditingController newGameNameCtrl = TextEditingController();
+  
+  final TextEditingController timerMinCtrl = TextEditingController(text: "5");
+  final TextEditingController timerSecCtrl = TextEditingController(text: "0");
 
   Map<int, TextEditingController> scoreCtrls = {};
   Map<int, TextEditingController> partialCtrls = {};
@@ -33,27 +42,45 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   void initState() {
     super.initState();
     fetchState();
+    // Interroga il server ogni secondo per mantenere sincronizzato il timer sul telefono
+    _pollingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (isTimerVisible || isTimerRunning) {
+        fetchState(silent: true);
+      }
+    });
   }
 
-  Future<void> fetchState() async {
+  @override
+  void dispose() {
+    _pollingTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> fetchState({bool silent = false}) async {
     try {
       final url = Uri.parse('${Uri.base.origin}/api/state');
       final response = await http.get(url);
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         setState(() {
-          eventName = data['eventName'];
-          eventNameCtrl.text = eventName;
           activePage = data['currentPage'];
           isRevealMode = data['isRevealMode'] ?? false;
           revealedTeamsCount = data['revealedTeamsCount'] ?? 0;
           teams = data['teams'];
           games = data['games'];
           
-          for (var t in teams) {
-            int id = t['id'];
-            if (!scoreCtrls.containsKey(id)) scoreCtrls[id] = TextEditingController();
-            if (!partialCtrls.containsKey(id)) partialCtrls[id] = TextEditingController();
+          isTimerVisible = data['isTimerVisible'] ?? false;
+          timerSeconds = data['timerSeconds'] ?? 0;
+          isTimerRunning = data['isTimerRunning'] ?? false;
+          
+          if (!silent) {
+            eventName = data['eventName'];
+            eventNameCtrl.text = eventName;
+            for (var t in teams) {
+              int id = t['id'];
+              if (!scoreCtrls.containsKey(id)) scoreCtrls[id] = TextEditingController();
+              if (!partialCtrls.containsKey(id)) partialCtrls[id] = TextEditingController();
+            }
           }
           
           if (activePage != 'totals') {
@@ -73,11 +100,11 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
     final url = Uri.parse('${Uri.base.origin}$endpoint');
     try {
       await http.post(url);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Azione eseguita!'), duration: Duration(milliseconds: 300)));
-      if (endpoint.contains('/team') || endpoint.contains('/game') || endpoint.contains('/reset') || endpoint.contains('/event') || endpoint.contains('/navigate') || endpoint.contains('/jolly') || endpoint.contains('/reveal')) {
-        await Future.delayed(const Duration(milliseconds: 300));
-        fetchState();
+      if (!endpoint.contains('timer/start') && !endpoint.contains('timer/stop')) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Azione eseguita!'), duration: Duration(milliseconds: 300)));
       }
+      await Future.delayed(const Duration(milliseconds: 300));
+      fetchState();
     } catch (e) {}
   }
 
@@ -111,10 +138,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
           spacing: 10, runSpacing: 10,
           children: palette.map((c) => GestureDetector(
             onTap: () => Navigator.pop(ctx, c),
-            child: Container(
-              width: 50, height: 50,
-              decoration: BoxDecoration(color: c, shape: BoxShape.circle, border: Border.all(color: Colors.black38, width: 2))
-            )
+            child: Container(width: 50, height: 50, decoration: BoxDecoration(color: c, shape: BoxShape.circle, border: Border.all(color: Colors.black38, width: 2)))
           )).toList(),
         ),
       )
@@ -123,13 +147,22 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   }
 
   String _colorToHex(Color c) => '#${c.value.toRadixString(16).substring(2).toUpperCase()}';
+  
+  String get formattedTimer {
+    String m = (timerSeconds ~/ 60).toString().padLeft(2, '0');
+    String s = (timerSeconds % 60).toString().padLeft(2, '0');
+    return "$m:$s";
+  }
 
   @override
   Widget build(BuildContext context) {
     bool isTotalsView = activePage == 'totals';
 
     return Scaffold(
-      appBar: AppBar(title: const Text('🕹️ Telecomando'), backgroundColor: Colors.blueGrey, actions: [IconButton(icon: const Icon(Icons.refresh), onPressed: fetchState)]),
+      appBar: AppBar(title: const Text('🕹️ Telecomando'), backgroundColor: Colors.blueGrey, actions: [
+        IconButton(icon: const Icon(Icons.videocam), onPressed: () => Navigator.pushNamed(context, '/stream')),
+        IconButton(icon: const Icon(Icons.refresh), onPressed: fetchState)
+      ]),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -151,20 +184,73 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                   child: Text(g['name'])
                 );
               }),
-              ElevatedButton.icon(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                icon: const Icon(Icons.videocam),
-                label: const Text('🔴 Streaming Live'),
-                onPressed: () {
-                  // Reindirizza l'utente alla pagina dedicata per la trasmissione
-                  redirectToBroadcaster(Uri.base.origin);
-                },
-              ),
             ],
           ),
           const Divider(height: 30, thickness: 2),
 
-          // --- MODALITÀ ANNUNCIO (SUSPENSE) ---
+          // --- SEZIONE COUNTDOWN ---
+          Card(
+            color: Colors.amber.shade50,
+            shape: RoundedRectangleBorder(side: const BorderSide(color: Colors.orange, width: 2), borderRadius: BorderRadius.circular(10)),
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: Column(
+                children: [
+                  SwitchListTile(
+                    title: const Text('⏳ MOSTRA COUNTDOWN A SCHERMO', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepOrange)),
+                    subtitle: const Text('Nasconde la classifica e mostra il timer.'),
+                    value: isTimerVisible,
+                    activeColor: Colors.deepOrange,
+                    onChanged: (val) => sendCommand('/api/timer/visibility?show=$val'),
+                  ),
+                  const Divider(),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(formattedTimer, style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, fontFamily: 'Courier')),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                        icon: const Icon(Icons.play_arrow), label: const Text('Start'),
+                        onPressed: isTimerRunning ? null : () => sendCommand('/api/timer/start')
+                      ),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                        icon: const Icon(Icons.stop), label: const Text('Stop'),
+                        onPressed: !isTimerRunning ? null : () => sendCommand('/api/timer/stop')
+                      ),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(backgroundColor: Colors.grey, foregroundColor: Colors.white),
+                        icon: const Icon(Icons.refresh), label: const Text('Reset'),
+                        onPressed: () => sendCommand('/api/timer/reset')
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(child: TextField(controller: timerMinCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Minuti', isDense: true))),
+                      const SizedBox(width: 10),
+                      Expanded(child: TextField(controller: timerSecCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Secondi', isDense: true))),
+                      const SizedBox(width: 10),
+                      ElevatedButton(
+                        onPressed: () => sendCommand('/api/timer/set?m=${timerMinCtrl.text}&s=${timerSecCtrl.text}'),
+                        child: const Text('Imposta')
+                      )
+                    ],
+                  )
+                ],
+              ),
+            ),
+          ),
+          const Divider(height: 30, thickness: 2),
+
+          // --- MODALITÀ ANNUNCIO ---
           if (teams.isNotEmpty) ...[
             Card(
               color: Colors.purple.shade50,
@@ -174,8 +260,8 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                 child: Column(
                   children: [
                     SwitchListTile(
-                      title: const Text('🎭 MODALITÀ ANNUNCIO (Classifica Rivelata)', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
-                      subtitle: const Text('Nasconde le squadre e le riordina dall\'ultima alla prima.'),
+                      title: const Text('🎭 MODALITÀ ANNUNCIO', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
+                      subtitle: const Text('Riordina la classifica e oscura le squadre.'),
                       value: isRevealMode,
                       activeColor: Colors.purple,
                       onChanged: (val) => sendCommand('/api/reveal/toggle?enable=$val'),
@@ -241,26 +327,15 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                         Row(
                           children: [
                             ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: hasUsedJolly ? Colors.grey : Colors.orange,
-                                foregroundColor: hasUsedJolly ? Colors.white70 : Colors.white,
-                              ), 
-                              onPressed: isTotalsView 
-                                ? null 
-                                : () {
-                                    if (hasUsedJolly) {
-                                      confirmAndSend('❌ ANNULLA JOLLY', 'Vuoi annullare l\'uso del Jolly per ${team['name']}?', '/api/jolly/revoke?team=$teamId');
-                                    } else {
-                                      confirmAndSend('🌟 GIOCA JOLLY', 'Sei sicuro di giocare il Jolly per ${team['name']}?', '/api/jolly?game=$currentGameIndex&team=$teamId');
-                                    }
+                              style: ElevatedButton.styleFrom(backgroundColor: hasUsedJolly ? Colors.grey : Colors.orange, foregroundColor: hasUsedJolly ? Colors.white70 : Colors.white), 
+                              onPressed: isTotalsView ? null : () {
+                                    if (hasUsedJolly) confirmAndSend('❌ ANNULLA JOLLY', 'Vuoi annullare l\'uso del Jolly?', '/api/jolly/revoke?team=$teamId');
+                                    else confirmAndSend('🌟 GIOCA JOLLY', 'Giocare il Jolly per questa squadra?', '/api/jolly?game=$currentGameIndex&team=$teamId');
                                 }, 
                               child: Text(hasUsedJolly ? 'Jolly Usato' : '🌟 Jolly')
                             ),
                             const SizedBox(width: 8),
-                            IconButton(
-                              icon: const Icon(Icons.delete, color: Colors.red), 
-                              onPressed: () => confirmAndSend('Elimina Squadra', 'Vuoi eliminare ${team['name']}?', '/api/delete/team?id=$teamId')
-                            )
+                            IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => confirmAndSend('Elimina Squadra', 'Vuoi eliminare ${team['name']}?', '/api/delete/team?id=$teamId'))
                           ],
                         ),
                       ],
@@ -268,12 +343,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                     const SizedBox(height: 10),
                     Row(
                       children: [
-                        Expanded(child: TextField(
-                          controller: scoreCtrls[teamId], 
-                          readOnly: isTotalsView,
-                          keyboardType: TextInputType.number, 
-                          decoration: InputDecoration(labelText: 'Punti', border: const OutlineInputBorder(), filled: true, fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white)
-                        )),
+                        Expanded(child: TextField(controller: scoreCtrls[teamId], readOnly: isTotalsView, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Punti', border: const OutlineInputBorder(), filled: true, fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white))),
                         const SizedBox(width: 10),
                         ElevatedButton(
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15)),
@@ -288,11 +358,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                     const SizedBox(height: 10),
                     Row(
                       children: [
-                        Expanded(child: TextField(
-                          controller: partialCtrls[teamId], 
-                          readOnly: isTotalsView,
-                          decoration: InputDecoration(labelText: 'Misura / Note libere', border: const OutlineInputBorder(), filled: true, fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white)
-                        )),
+                        Expanded(child: TextField(controller: partialCtrls[teamId], readOnly: isTotalsView, decoration: InputDecoration(labelText: 'Misura / Note libere', border: const OutlineInputBorder(), filled: true, fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white))),
                         const SizedBox(width: 10),
                         ElevatedButton(
                           style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15)),
@@ -334,8 +400,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                   const SizedBox(width: 10),
                   ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(backgroundColor: Colors.orange, foregroundColor: Colors.white),
-                    icon: const Icon(Icons.add_circle),
-                    label: const Text('Aggiungi Gioco'),
+                    icon: const Icon(Icons.add_circle), label: const Text('Aggiungi Gioco'),
                     onPressed: () {
                       sendCommand('/api/game?name=${newGameNameCtrl.text}');
                       newGameNameCtrl.clear();

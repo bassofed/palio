@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:async'; // Aggiunto per il Timer
 import 'package:flutter/material.dart';
 import '../models/team.dart';
 import '../models/game.dart';
@@ -10,12 +11,16 @@ class MatchProvider extends ChangeNotifier {
   String currentPage = 'totals';
   String eventName = 'GRANDE EVENTO 2026';
 
-  // --- STATO MODALITÀ ANNUNCIO (REVEAL) ---
   bool isRevealMode = false;
   int revealedTeamsCount = 0;
-
-  // --- STATO STREAMING VIDEO WEBRTC ---
   bool isStreamingActive = false;
+
+  // --- STATO DEL COUNTDOWN ---
+  bool isTimerVisible = false;
+  int timerSeconds = 300; // Tempo attuale (es. 5 min = 300)
+  int initialTimerSeconds = 300; // Tempo salvato per il reset
+  bool isTimerRunning = false;
+  Timer? _countdownTimer;
 
   final String _saveFileName = 'scoreboard_backup.json';
 
@@ -30,6 +35,11 @@ class MatchProvider extends ChangeNotifier {
         currentPage = data['currentPage'] ?? 'totals';
         isRevealMode = data['isRevealMode'] ?? false;
         revealedTeamsCount = data['revealedTeamsCount'] ?? 0;
+        
+        isTimerVisible = data['isTimerVisible'] ?? false;
+        timerSeconds = data['timerSeconds'] ?? 300;
+        initialTimerSeconds = data['initialTimerSeconds'] ?? 300;
+        isTimerRunning = false; // Il timer parte sempre fermo al riavvio
         
         if (data['teams'] != null) {
           teams = (data['teams'] as List).map((t) => Team.fromJson(t)).toList();
@@ -51,6 +61,9 @@ class MatchProvider extends ChangeNotifier {
         'currentPage': currentPage,
         'isRevealMode': isRevealMode,
         'revealedTeamsCount': revealedTeamsCount,
+        'isTimerVisible': isTimerVisible,
+        'timerSeconds': timerSeconds,
+        'initialTimerSeconds': initialTimerSeconds,
         'teams': teams.map((t) => t.toJson()).toList(),
         'games': games.map((g) => g.toJson()).toList(),
       };
@@ -59,7 +72,52 @@ class MatchProvider extends ChangeNotifier {
     } catch (e) {}
   }
 
-  // --- FUNZIONI MODALITÀ ANNUNCIO ---
+  // --- FUNZIONI COUNTDOWN ---
+  void toggleTimerVisibility(bool visible) {
+    isTimerVisible = visible;
+    _autoSave();
+  }
+
+  void setTimer(int minutes, int seconds) {
+    initialTimerSeconds = (minutes * 60) + seconds;
+    timerSeconds = initialTimerSeconds;
+    stopTimer();
+    _autoSave();
+  }
+
+  void startTimer() {
+    if (!isTimerRunning && timerSeconds > 0) {
+      isTimerRunning = true;
+      _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (timerSeconds > 0) {
+          timerSeconds--;
+          notifyListeners(); // Aggiorna solo UI, non salviamo su disco ogni singolo secondo per non usurare il drive
+        } else {
+          stopTimer();
+        }
+      });
+      notifyListeners();
+    }
+  }
+
+  void stopTimer() {
+    isTimerRunning = false;
+    _countdownTimer?.cancel();
+    notifyListeners();
+  }
+
+  void resetTimer() {
+    stopTimer();
+    timerSeconds = initialTimerSeconds;
+    _autoSave();
+  }
+  // ---------------------------
+
+  void setStreamingActive(bool value) {
+    isStreamingActive = value;
+    notifyListeners();
+  }
+
   void toggleRevealMode(bool enable) {
     isRevealMode = enable;
     if (!enable) revealedTeamsCount = 0;
@@ -74,12 +132,6 @@ class MatchProvider extends ChangeNotifier {
   void revealPrev() {
     if (revealedTeamsCount > 0) revealedTeamsCount--;
     _autoSave();
-  }
-  // ------------------------------------
-
-  void setStreamingActive(bool active) {
-    isStreamingActive = active;
-    notifyListeners();
   }
 
   void setEventName(String name) {
@@ -112,7 +164,6 @@ class MatchProvider extends ChangeNotifier {
   void removeGame(int index) {
     if (index >= 0 && index < games.length) {
       games.removeAt(index);
-      
       bool pageChanged = false;
       if (currentPage == index.toString()) {
         currentPage = 'totals';
@@ -124,12 +175,7 @@ class MatchProvider extends ChangeNotifier {
           pageChanged = true;
         }
       }
-      
-      // Se eliminando un gioco abbiamo cambiato pagina, azzeriamo il reveal
-      if (pageChanged && isRevealMode) {
-        revealedTeamsCount = 0;
-      }
-      
+      if (pageChanged && isRevealMode) revealedTeamsCount = 0;
       _autoSave();
     }
   }
@@ -141,7 +187,6 @@ class MatchProvider extends ChangeNotifier {
         var newScores = <int, int>{};
         var newPartials = <int, String>{};
         var newJollies = <int, bool>{};
-        
         for (int i = 0; i <= teams.length; i++) {
           if (i == index) continue;
           int newKey = i > index ? i - 1 : i;
@@ -153,12 +198,7 @@ class MatchProvider extends ChangeNotifier {
         game.partials = newPartials;
         game.activeJollies = newJollies;
       }
-      
-      // Se si elimina un team, ci assicuriamo che il contatore del reveal non vada fuori limite
-      if (revealedTeamsCount > teams.length) {
-        revealedTeamsCount = teams.length;
-      }
-      
+      if (revealedTeamsCount > teams.length) revealedTeamsCount = teams.length;
       _autoSave();
     }
   }
@@ -184,6 +224,8 @@ class MatchProvider extends ChangeNotifier {
     currentPage = 'totals';
     isRevealMode = false;
     revealedTeamsCount = 0;
+    isTimerVisible = false;
+    stopTimer();
     final file = File(_saveFileName);
     if (file.existsSync()) file.deleteSync();
     _autoSave();
@@ -217,16 +259,10 @@ class MatchProvider extends ChangeNotifier {
     _autoSave();
   }
 
-  // --- LOGICA DI NAVIGAZIONE AGGIORNATA ---
   void navigateTo(String page) {
-    if (currentPage != page) { // Controlla se stai effettivamente cambiando pagina
+    if (currentPage != page) {
       currentPage = page;
-      
-      // Se cambi schermata e sei in modalità Annuncio, le squadre tornano coperte!
-      if (isRevealMode) {
-        revealedTeamsCount = 0;
-      }
-      
+      if (isRevealMode) revealedTeamsCount = 0;
       _autoSave();
     }
   }

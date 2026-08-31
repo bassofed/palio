@@ -1,12 +1,9 @@
 import 'dart:convert';
 import 'dart:io';
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
-
-// Nuovi import per WebRTC e WebSocket
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/io.dart';
 
@@ -57,62 +54,125 @@ class ScoreboardApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<MatchProvider>();
 
-    bool isTotals = state.currentPage == 'totals';
-    String mainTitle = state.eventName;
-    String subtitle = 'CLASSIFICA GENERALE';
-    Game? currentGame;
+    // --- LOGICA TIMER A SCHERMO INTERO ---
+    Widget mainContent;
 
-    if (!isTotals) {
-      int? gameIndex = int.tryParse(state.currentPage);
-      if (gameIndex != null && gameIndex >= 0 && gameIndex < state.games.length) {
-        currentGame = state.games[gameIndex];
-        subtitle = currentGame.name.toUpperCase();
-      }
-    }
+    if (state.isTimerVisible) {
+      String m = (state.timerSeconds ~/ 60).toString().padLeft(2, '0');
+      String s = (state.timerSeconds % 60).toString().padLeft(2, '0');
+      Color timerColor = state.timerSeconds <= 10 ? Colors.redAccent : Colors.white;
 
-    List<Widget> teamCardWidgets = [];
-    
-    if (state.teams.isNotEmpty) {
-      if (state.isRevealMode) {
-        List<int> sortedIndices = List.generate(state.teams.length, (i) => i);
-        sortedIndices.sort((a, b) {
-          int scoreA = isTotals ? state.getTotalScore(a) : (currentGame?.scores[a] ?? 0);
-          int scoreB = isTotals ? state.getTotalScore(b) : (currentGame?.scores[b] ?? 0);
-          return scoreA.compareTo(scoreB);
-        });
+      mainContent = Center(
+        child: FittedBox(
+          fit: BoxFit.contain,
+          child: Padding(
+            padding: const EdgeInsets.all(50.0),
+            child: Text(
+              "$m:$s",
+              style: TextStyle(
+                fontSize: 600, // Gigantesco!
+                fontFamily: 'Courier',
+                fontWeight: FontWeight.bold,
+                color: timerColor,
+                shadows: const [Shadow(color: Colors.black, blurRadius: 40, offset: Offset(0, 10))]
+              ),
+            ),
+          ),
+        ),
+      );
+    } else {
+      // --- LOGICA NORMALE (Tabellone Punti) ---
+      bool isTotals = state.currentPage == 'totals';
+      String mainTitle = state.eventName;
+      String subtitle = 'CLASSIFICA GENERALE';
+      Game? currentGame;
 
-        for (int i = 0; i < sortedIndices.length; i++) {
-          int originalIndex = sortedIndices[i];
-          final team = state.teams[originalIndex];
-          int score = isTotals ? state.getTotalScore(originalIndex) : (currentGame?.scores[originalIndex] ?? 0);
-          bool showJolly = isTotals ? team.hasUsedJolly : (currentGame?.activeJollies[originalIndex] ?? false);
-          String? partial;
-          if (!isTotals) {
-            partial = currentGame?.partials[originalIndex];
-            if (partial == null || partial.isEmpty) partial = null;
-          }
-
-          if (i < state.revealedTeamsCount) {
-            teamCardWidgets.add(Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10.0), child: _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, key: ValueKey('team_${originalIndex}_revealed')))));
-          } else {
-            int rank = state.teams.length - i; 
-            teamCardWidgets.add(Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10.0), child: _buildObscuredCard(rank))));
-          }
-        }
-      } else {
-        for (int i = 0; i < state.teams.length; i++) {
-          final team = state.teams[i];
-          int score = isTotals ? state.getTotalScore(i) : (currentGame?.scores[i] ?? 0);
-          bool showJolly = isTotals ? team.hasUsedJolly : (currentGame?.activeJollies[i] ?? false);
-          String? partial;
-          if (!isTotals) {
-            partial = currentGame?.partials[i];
-            if (partial == null || partial.isEmpty) partial = null;
-          }
-          teamCardWidgets.add(Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10.0), child: _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, key: ValueKey('team_$i')))));
+      if (!isTotals) {
+        int? gameIndex = int.tryParse(state.currentPage);
+        if (gameIndex != null && gameIndex >= 0 && gameIndex < state.games.length) {
+          currentGame = state.games[gameIndex];
+          subtitle = currentGame.name.toUpperCase();
         }
       }
-    }
+
+      List<Widget> teamCardWidgets = [];
+      if (state.teams.isNotEmpty) {
+        if (state.isRevealMode) {
+          List<int> sortedIndices = List.generate(state.teams.length, (i) => i);
+          sortedIndices.sort((a, b) {
+            int scoreA = isTotals ? state.getTotalScore(a) : (currentGame?.scores[a] ?? 0);
+            int scoreB = isTotals ? state.getTotalScore(b) : (currentGame?.scores[b] ?? 0);
+            return scoreA.compareTo(scoreB);
+          });
+
+          for (int i = 0; i < sortedIndices.length; i++) {
+            int originalIndex = sortedIndices[i];
+            final team = state.teams[originalIndex];
+            int score = isTotals ? state.getTotalScore(originalIndex) : (currentGame?.scores[originalIndex] ?? 0);
+            bool showJolly = isTotals ? team.hasUsedJolly : (currentGame?.activeJollies[originalIndex] ?? false);
+            String? partial;
+            if (!isTotals) {
+              partial = currentGame?.partials[originalIndex];
+              if (partial == null || partial.isEmpty) partial = null;
+            }
+
+            if (i < state.revealedTeamsCount) {
+              teamCardWidgets.add(Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10.0), child: _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, key: ValueKey('team_${originalIndex}_revealed')))));
+            } else {
+              int rank = state.teams.length - i; 
+              teamCardWidgets.add(Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10.0), child: _buildObscuredCard(rank))));
+            }
+          }
+        } else {
+          for (int i = 0; i < state.teams.length; i++) {
+            final team = state.teams[i];
+            int score = isTotals ? state.getTotalScore(i) : (currentGame?.scores[i] ?? 0);
+            bool showJolly = isTotals ? team.hasUsedJolly : (currentGame?.activeJollies[i] ?? false);
+            String? partial;
+            if (!isTotals) {
+              partial = currentGame?.partials[i];
+              if (partial == null || partial.isEmpty) partial = null;
+            }
+            teamCardWidgets.add(Expanded(child: Padding(padding: const EdgeInsets.symmetric(horizontal: 10.0), child: _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, key: ValueKey('team_$i')))));
+          }
+        }
+      }
+
+      mainContent = Center(
+        child: Padding(
+          padding: const EdgeInsets.all(30.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              FittedBox(
+                child: Text(
+                  mainTitle,
+                  style: const TextStyle(fontSize: 80, color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 3, shadows: [Shadow(color: Colors.black54, blurRadius: 20, offset: Offset(0, 5))]),
+                ),
+              ),
+              FittedBox(
+                child: Text(
+                  subtitle,
+                  style: const TextStyle(fontSize: 40, color: Colors.amberAccent, fontWeight: FontWeight.bold, letterSpacing: 5),
+                ),
+              ),
+              const SizedBox(height: 60),
+              
+              if (state.teams.isEmpty)
+                const Text("In attesa delle squadre...", style: TextStyle(color: Colors.white54, fontSize: 30))
+              else
+                Expanded(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: teamCardWidgets, 
+                  ),
+                ),
+            ],
+          ),
+        ),
+      );
+    } // Fine else normale
 
     return Scaffold(
       body: Container(
@@ -125,42 +185,8 @@ class ScoreboardApp extends StatelessWidget {
         ),
         child: Stack(
           children: [
-            Center(
-              child: Padding(
-                padding: const EdgeInsets.all(30.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    FittedBox(
-                      child: Text(
-                        mainTitle,
-                        style: const TextStyle(fontSize: 80, color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 3, shadows: [Shadow(color: Colors.black54, blurRadius: 20, offset: Offset(0, 5))]),
-                      ),
-                    ),
-                    FittedBox(
-                      child: Text(
-                        subtitle,
-                        style: const TextStyle(fontSize: 40, color: Colors.amberAccent, fontWeight: FontWeight.bold, letterSpacing: 5),
-                      ),
-                    ),
-                    const SizedBox(height: 60),
-                    
-                    if (state.teams.isEmpty)
-                      const Text("In attesa delle squadre...", style: TextStyle(color: Colors.white54, fontSize: 30))
-                    else
-                      Expanded(
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: teamCardWidgets, 
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-            ),
+            mainContent,
             
-            // L'OVERLAY VIDEO (Sempre in ascolto, ma visibile solo se attivo)
             Positioned.fill(
               child: Offstage(
                 offstage: !state.isStreamingActive,
@@ -258,8 +284,9 @@ class ScoreboardApp extends StatelessWidget {
     );
   }
 }
+
 // =======================================================
-// WIDGET RICEVITORE WEBRTC (NATIVO DESKTOP)
+// WIDGET RICEVITORE WEBRTC
 // =======================================================
 class WebRTCReceiverWidget extends StatefulWidget {
   const WebRTCReceiverWidget({super.key});
@@ -272,8 +299,6 @@ class _WebRTCReceiverWidgetState extends State<WebRTCReceiverWidget> {
   final RTCVideoRenderer _renderer = RTCVideoRenderer();
   RTCPeerConnection? _peerConnection;
   IOWebSocketChannel? _signalingChannel;
-  
-  // Buffer per salvare i candidati di rete che arrivano troppo presto
   final List<RTCIceCandidate> _candidateBuffer = []; 
 
   @override
@@ -285,50 +310,44 @@ class _WebRTCReceiverWidgetState extends State<WebRTCReceiverWidget> {
 
   Future<void> _initRenderer() async {
     await _renderer.initialize();
-    print("📺 Video Renderer inizializzato sul Desktop");
   }
 
   void _connectSignaling() {
     final customClient = HttpClient()
       ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
 
-    print("🔌 Tentativo di connessione al WebSocket locale...");
     WebSocket.connect('wss://127.0.0.1:8080/ws', customClient: customClient).then((ws) {
-      print("✅ Connesso al WebSocket del Signaling Server!");
       _signalingChannel = IOWebSocketChannel(ws);
-      
       _signalingChannel!.stream.listen((message) {
         _handleSignalingMessage(message);
       });
-      
-    }).catchError((e) {
-      print("❌ Errore connessione WebSocket dal Desktop: $e");
-    });
+    }).catchError((e) {});
   }
 
   Future<void> _handleSignalingMessage(String message) async {
     try {
       final data = jsonDecode(message);
 
+      if (data['stop'] == true) {
+        _peerConnection?.close();
+        _peerConnection = null;
+        setState(() {
+          _renderer.srcObject = null;
+        });
+        _candidateBuffer.clear();
+        return; 
+      }
+
       if (data['offer'] != null) {
-        print("📩 RICEVUTA OFFERTA dal telefono.");
         await _createPeerConnection();
-        
         var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
         await _peerConnection!.setRemoteDescription(offer);
-        print("✅ Remote Description impostata.");
-        
         var answer = await _peerConnection!.createAnswer();
         await _peerConnection!.setLocalDescription(answer);
-        print("✅ Local Description (Risposta) creata.");
-        
         _signalingChannel?.sink.add(jsonEncode({'answer': answer.toMap()}));
-        print("📤 INVIATA RISPOSTA al telefono.");
 
-        // Svuota il buffer dei candidati arrivati in anticipo
         for (var cand in _candidateBuffer) {
           await _peerConnection!.addCandidate(cand);
-          print("🧊 Aggiunto Ice Candidate dal buffer.");
         }
         _candidateBuffer.clear();
       } 
@@ -339,40 +358,27 @@ class _WebRTCReceiverWidgetState extends State<WebRTCReceiverWidget> {
         
         if (_peerConnection != null) {
           await _peerConnection!.addCandidate(candidate);
-          print("🧊 Aggiunto Ice Candidate live.");
         } else {
           _candidateBuffer.add(candidate);
-          print("🧊 Ice Candidate messo in buffer (peer connection non ancora pronta).");
         }
       }
-    } catch (e) {
-      print('❌ Errore parsing WebRTC: $e');
-    }
+    } catch (e) {}
   }
 
   Future<void> _createPeerConnection() async {
     if (_peerConnection != null) return;
-    print("⚙️ Creazione della PeerConnection...");
-
     Map<String, dynamic> configuration = {
-      "iceServers": [
-        {"url": "stun:stun.l.google.com:19302"},
-      ]
+      "iceServers": [{"url": "stun:stun.l.google.com:19302"}]
     };
-
     _peerConnection = await createPeerConnection(configuration);
 
-    // Usa onAddStream, che spesso è più affidabile su Desktop
     _peerConnection!.onAddStream = (MediaStream stream) {
-      print("🎥 FLUSSO VIDEO IN ARRIVO! Tracce video trovate: ${stream.getVideoTracks().length}");
       setState(() {
         _renderer.srcObject = stream;
       });
     };
 
-    // Fallback: ascoltiamo anche onTrack per sicurezza
     _peerConnection!.onTrack = (RTCTrackEvent event) {
-      print("🎥 TRACK IN ARRIVO: ${event.track.kind}");
       if (event.track.kind == 'video' && event.streams.isNotEmpty) {
         setState(() {
           _renderer.srcObject = event.streams[0];
@@ -383,15 +389,10 @@ class _WebRTCReceiverWidgetState extends State<WebRTCReceiverWidget> {
     _peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
       _signalingChannel?.sink.add(jsonEncode({'candidate': candidate.toMap()}));
     };
-
-    _peerConnection!.onIceConnectionState = (RTCIceConnectionState state) {
-      print('🔄 Stato Connessione WebRTC: $state');
-    };
   }
 
   @override
   void dispose() {
-    print("🧹 Pulizia risorse WebRTC...");
     _renderer.dispose();
     _peerConnection?.dispose();
     _signalingChannel?.sink.close();
