@@ -4,13 +4,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 
+// --- AGGIUNTO PER APRIRE IL BROWSER IN AUTOMATICO ---
+import 'package:url_launcher/url_launcher.dart'; 
+
 import 'providers/match_provider.dart';
 import 'server/local_server.dart';
 import 'ui/web/remote_control.dart';
 import 'ui/web/web_helper.dart';
 import 'ui/mobile/mobile_remote.dart';
-
-// --- IMPORTIAMO LA UI DESKTOP CHE ABBIAMO SPOSTATO ---
 import 'ui/desktop/desktop_scoreboard.dart';
 
 class MyHttpOverrides extends HttpOverrides {
@@ -62,15 +63,28 @@ void main() async {
     final matchProvider = MatchProvider();
     await matchProvider.loadFromFile();
     
+    // Accendiamo il Server e il WebRTC
     await startLocalServer(matchProvider);
     await matchProvider.initWebRTC();
+
+    // =========================================================
+    // TRUCCO: APRIAMO IL TELECOMANDO NEL BROWSER IN AUTOMATICO!
+    // =========================================================
+    Future.delayed(const Duration(seconds: 2), () async {
+      // Usiamo l'indirizzo IP locale del PC stesso
+      final url = Uri.parse('https://127.0.0.1:8080'); 
+      if (await canLaunchUrl(url)) {
+        await launchUrl(url, mode: LaunchMode.externalApplication);
+      }
+    });
+    // =========================================================
 
     runApp(
       ChangeNotifierProvider.value(
         value: matchProvider,
         child: const MaterialApp(
           debugShowCheckedModeBanner: false, 
-          home: ScoreboardApp() // Richiama la classe dal nuovo file!
+          home: ScoreboardApp() 
         ),
       ),
     );

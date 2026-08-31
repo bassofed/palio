@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Sfondo Icona (Trasparente o arrotondato, qui usiamo un cerchio scuro opzionale) -->
+  <rect width="512" height="512" rx="112" fill="#1A252C"/>
+  
+  <!-- Stendardo del Palio -->
+  <path d="M120 80 H392 V360 L256 460 L120 360 Z" fill="#C0392B"/>
+  <path d="M120 80 H392 V120 H120 Z" fill="#F1C40F"/>
+  <polygon points="120,360 256,460 256,360" fill="#A93226" opacity="0.3"/>
+
+  <!-- Campanile (basato su IMG_01.jpg) -->
+  
+  <!-- Corpo principale -->
+  <rect x="206" y="220" width="100" height="240" fill="#F5E4C3"/>
+  <rect x="236" y="250" width="40" height="150" fill="#E0C69B" opacity="0.4"/>
+  
+  <!-- Cornice marcapiano -->
+  <rect x="196" y="210" width="120" height="10" fill="#D4B685"/>
+  
+  <!-- Cella Campanaria -->
+  <rect x="216" y="140" width="80" height="70" fill="#F5E4C3"/>
+  <!-- Bifore (Finestre delle campane) -->
+  <path d="M226 160 Q236 145 246 160 V200 H226 Z" fill="#2C3E50"/>
+  <path d="M266 160 Q276 145 286 160 V200 H266 Z" fill="#2C3E50"/>
+  
+  <!-- Cornice superiore / Balconcino -->
+  <rect x="206" y="130" width="100" height="10" fill="#D4B685"/>
+  
+  <!-- Lanterna Ottagonale -->
+  <polygon points="226,130 286,130 276,90 236,90" fill="#F5E4C3"/>
+  <rect x="246" y="100" width="20" height="30" fill="#2C3E50"/>
+  
+  <!-- Cupola a bulbo in cotto/rame -->
+  <path d="M236 90 C236 50 256 30 256 30 C256 30 276 50 276 90 Z" fill="#C0392B"/>
+  
+  <!-- Croce apicale -->
+  <rect x="254" y="10" width="4" height="25" fill="#F1C40F"/>
+  <rect x="246" y="18" width="20" height="4" fill="#F1C40F"/>
+</svg>
