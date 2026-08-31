@@ -1,6 +1,15 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- INCOLLA QUESTO BLOCCO QUI -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+    </queries>
+    <!-- FINE BLOCCO -->
+
     <application
-        android:label="palio"
+        android:label="Palio"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

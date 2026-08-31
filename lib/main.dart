@@ -5,25 +5,42 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
-import 'package:web_socket_channel/io.dart';
 
 import 'providers/match_provider.dart';
 import 'server/local_server.dart';
 import 'models/game.dart';
 import 'ui/web/remote_control.dart';
 import 'ui/web/web_helper.dart';
+import 'ui/mobile/mobile_remote.dart';
+
+class MyHttpOverrides extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  HttpOverrides.global = MyHttpOverrides();
 
   if (kIsWeb) {
     registerIframeViewFactory();
-
     runApp(const MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Telecomando',
       home: RemoteControlScreen(),
     ));
+    
+  } else if (Platform.isAndroid || Platform.isIOS) {
+    runApp(const MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'Arbitro Mobile',
+      home: MobileRemoteScreen(),
+    ));
+    
   } else {
     await windowManager.ensureInitialized();
     WindowOptions windowOptions = const WindowOptions(size: Size(1280, 720), center: true, title: "Tabellone Segnapunti");
@@ -36,7 +53,9 @@ void main() async {
 
     final matchProvider = MatchProvider();
     await matchProvider.loadFromFile();
+    
     await startLocalServer(matchProvider);
+    await matchProvider.initWebRTC();
 
     runApp(
       ChangeNotifierProvider.value(
@@ -54,47 +73,70 @@ class ScoreboardApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<MatchProvider>();
 
-    // --- LOGICA TIMER A SCHERMO INTERO ---
+    // --- CALCOLO TITOLI CONDIVISO PER ENTRAMBE LE VISTE ---
+    bool isTotals = state.currentPage == 'totals';
+    String mainTitle = state.eventName;
+    String subtitle = 'CLASSIFICA GENERALE';
+    Game? currentGame;
+
+    if (!isTotals) {
+      int? gameIndex = int.tryParse(state.currentPage);
+      if (gameIndex != null && gameIndex >= 0 && gameIndex < state.games.length) {
+        currentGame = state.games[gameIndex];
+        subtitle = currentGame.name.toUpperCase();
+      }
+    }
+
     Widget mainContent;
 
     if (state.isTimerVisible) {
+      // --- VISTA TIMER CON TITOLI INCLUSI ---
       String m = (state.timerSeconds ~/ 60).toString().padLeft(2, '0');
       String s = (state.timerSeconds % 60).toString().padLeft(2, '0');
       Color timerColor = state.timerSeconds <= 10 ? Colors.redAccent : Colors.white;
 
       mainContent = Center(
-        child: FittedBox(
-          fit: BoxFit.contain,
-          child: Padding(
-            padding: const EdgeInsets.all(50.0),
-            child: Text(
-              "$m:$s",
-              style: TextStyle(
-                fontSize: 600, // Gigantesco!
-                fontFamily: 'Courier',
-                fontWeight: FontWeight.bold,
-                color: timerColor,
-                shadows: const [Shadow(color: Colors.black, blurRadius: 40, offset: Offset(0, 10))]
+        child: Padding(
+          padding: const EdgeInsets.all(30.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              FittedBox(
+                child: Text(
+                  mainTitle,
+                  style: const TextStyle(fontSize: 80, color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 3, shadows: [Shadow(color: Colors.black54, blurRadius: 20, offset: Offset(0, 5))]),
+                ),
               ),
-            ),
+              FittedBox(
+                child: Text(
+                  subtitle,
+                  style: const TextStyle(fontSize: 40, color: Colors.amberAccent, fontWeight: FontWeight.bold, letterSpacing: 5),
+                ),
+              ),
+              const SizedBox(height: 40),
+              Expanded(
+                child: FittedBox(
+                  fit: BoxFit.contain,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 50.0),
+                    child: Text(
+                      "$m:$s",
+                      style: TextStyle(
+                        fontFamily: 'Courier',
+                        fontWeight: FontWeight.bold,
+                        color: timerColor,
+                        shadows: const [Shadow(color: Colors.black, blurRadius: 40, offset: Offset(0, 10))]
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       );
     } else {
-      // --- LOGICA NORMALE (Tabellone Punti) ---
-      bool isTotals = state.currentPage == 'totals';
-      String mainTitle = state.eventName;
-      String subtitle = 'CLASSIFICA GENERALE';
-      Game? currentGame;
-
-      if (!isTotals) {
-        int? gameIndex = int.tryParse(state.currentPage);
-        if (gameIndex != null && gameIndex >= 0 && gameIndex < state.games.length) {
-          currentGame = state.games[gameIndex];
-          subtitle = currentGame.name.toUpperCase();
-        }
-      }
-
+      // --- VISTA NORMALE TABELLONE SQUADRE ---
       List<Widget> teamCardWidgets = [];
       if (state.teams.isNotEmpty) {
         if (state.isRevealMode) {
@@ -172,7 +214,7 @@ class ScoreboardApp extends StatelessWidget {
           ),
         ),
       );
-    } // Fine else normale
+    } 
 
     return Scaffold(
       body: Container(
@@ -187,12 +229,19 @@ class ScoreboardApp extends StatelessWidget {
           children: [
             mainContent,
             
-            Positioned.fill(
-              child: Offstage(
-                offstage: !state.isStreamingActive,
-                child: const WebRTCReceiverWidget(),
+            if (state.isRendererReady)
+              Positioned.fill(
+                child: Offstage(
+                  offstage: !state.isStreamingActive,
+                  child: Container(
+                    color: Colors.black,
+                    child: RTCVideoView(
+                      state.renderer,
+                      objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                    ),
+                  ),
+                ),
               ),
-            ),
           ],
         ),
       ),
@@ -281,132 +330,6 @@ class ScoreboardApp extends StatelessWidget {
           )
         )
       )
-    );
-  }
-}
-
-// =======================================================
-// WIDGET RICEVITORE WEBRTC
-// =======================================================
-class WebRTCReceiverWidget extends StatefulWidget {
-  const WebRTCReceiverWidget({super.key});
-
-  @override
-  State<WebRTCReceiverWidget> createState() => _WebRTCReceiverWidgetState();
-}
-
-class _WebRTCReceiverWidgetState extends State<WebRTCReceiverWidget> {
-  final RTCVideoRenderer _renderer = RTCVideoRenderer();
-  RTCPeerConnection? _peerConnection;
-  IOWebSocketChannel? _signalingChannel;
-  final List<RTCIceCandidate> _candidateBuffer = []; 
-
-  @override
-  void initState() {
-    super.initState();
-    _initRenderer();
-    _connectSignaling();
-  }
-
-  Future<void> _initRenderer() async {
-    await _renderer.initialize();
-  }
-
-  void _connectSignaling() {
-    final customClient = HttpClient()
-      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
-
-    WebSocket.connect('wss://127.0.0.1:8080/ws', customClient: customClient).then((ws) {
-      _signalingChannel = IOWebSocketChannel(ws);
-      _signalingChannel!.stream.listen((message) {
-        _handleSignalingMessage(message);
-      });
-    }).catchError((e) {});
-  }
-
-  Future<void> _handleSignalingMessage(String message) async {
-    try {
-      final data = jsonDecode(message);
-
-      if (data['stop'] == true) {
-        _peerConnection?.close();
-        _peerConnection = null;
-        setState(() {
-          _renderer.srcObject = null;
-        });
-        _candidateBuffer.clear();
-        return; 
-      }
-
-      if (data['offer'] != null) {
-        await _createPeerConnection();
-        var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
-        await _peerConnection!.setRemoteDescription(offer);
-        var answer = await _peerConnection!.createAnswer();
-        await _peerConnection!.setLocalDescription(answer);
-        _signalingChannel?.sink.add(jsonEncode({'answer': answer.toMap()}));
-
-        for (var cand in _candidateBuffer) {
-          await _peerConnection!.addCandidate(cand);
-        }
-        _candidateBuffer.clear();
-      } 
-      else if (data['candidate'] != null) {
-        var candidateMap = data['candidate'];
-        var candidate = RTCIceCandidate(
-            candidateMap['candidate'], candidateMap['sdpMid'], candidateMap['sdpMLineIndex']);
-        
-        if (_peerConnection != null) {
-          await _peerConnection!.addCandidate(candidate);
-        } else {
-          _candidateBuffer.add(candidate);
-        }
-      }
-    } catch (e) {}
-  }
-
-  Future<void> _createPeerConnection() async {
-    if (_peerConnection != null) return;
-    Map<String, dynamic> configuration = {
-      "iceServers": [{"url": "stun:stun.l.google.com:19302"}]
-    };
-    _peerConnection = await createPeerConnection(configuration);
-
-    _peerConnection!.onAddStream = (MediaStream stream) {
-      setState(() {
-        _renderer.srcObject = stream;
-      });
-    };
-
-    _peerConnection!.onTrack = (RTCTrackEvent event) {
-      if (event.track.kind == 'video' && event.streams.isNotEmpty) {
-        setState(() {
-          _renderer.srcObject = event.streams[0];
-        });
-      }
-    };
-
-    _peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
-      _signalingChannel?.sink.add(jsonEncode({'candidate': candidate.toMap()}));
-    };
-  }
-
-  @override
-  void dispose() {
-    _renderer.dispose();
-    _peerConnection?.dispose();
-    _signalingChannel?.sink.close();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.black,
-      child: RTCVideoView(
-        _renderer,
-        objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-      ),
     );
   }
 }

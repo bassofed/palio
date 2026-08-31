@@ -30,7 +30,6 @@ Future<void> startLocalServer(MatchProvider provider) async {
       'isRevealMode': provider.isRevealMode, 
       'revealedTeamsCount': provider.revealedTeamsCount, 
       'isStreamingActive': provider.isStreamingActive, 
-      // Dati Countdown:
       'isTimerVisible': provider.isTimerVisible,
       'timerSeconds': provider.timerSeconds,
       'isTimerRunning': provider.isTimerRunning,
@@ -40,15 +39,17 @@ Future<void> startLocalServer(MatchProvider provider) async {
         'colorHex': e.value.colorHex,
         'hasUsedJolly': e.value.hasUsedJolly
       }).toList(),
+      // --- MODIFICA: Ora il server invia anche i punteggi correnti al web ---
       'games': provider.games.asMap().entries.map((e) => {
         'id': e.key, 
-        'name': e.value.name
+        'name': e.value.name,
+        'scores': e.value.scores.map((k, v) => MapEntry(k.toString(), v)),
+        'partials': e.value.partials.map((k, v) => MapEntry(k.toString(), v))
       }).toList(),
     };
     return Response.ok(jsonEncode(data), headers: {'Content-Type': 'application/json'});
   });
 
-  // --- API TIMER ---
   router.post('/api/timer/visibility', (Request request) {
     bool show = request.url.queryParameters['show'] == 'true';
     provider.toggleTimerVisibility(show);
@@ -76,7 +77,6 @@ Future<void> startLocalServer(MatchProvider provider) async {
     provider.setTimer(m, s);
     return Response.ok('Timer set');
   });
-  // -----------------
 
   router.post('/api/reveal/toggle', (Request request) {
     bool enable = request.url.queryParameters['enable'] == 'true';
@@ -162,20 +162,19 @@ Future<void> startLocalServer(MatchProvider provider) async {
     return Response.ok('Tutto resettato');
   });
 
+  // --- NUOVA API: FORZA STOP STREAMING ---
+  router.post('/api/stream/stop', (Request request) {
+    provider.forceStopStream();
+    return Response.ok('Streaming forzato a chiudersi');
+  });
+
   final List<WebSocketChannel> activeChannels = [];
 
   router.get('/ws', webSocketHandler((WebSocketChannel webSocket) {
     activeChannels.add(webSocket);
     webSocket.stream.listen((message) {
-      try {
-        final decoded = jsonDecode(message);
-        if (decoded['offer'] != null) {
-          provider.setStreamingActive(true);
-        } else if (decoded['stop'] == true) {
-          provider.setStreamingActive(false);
-        }
-      } catch (e) {}
-
+      // Il server ora si limita solo a fare da "Postino", inoltrando i messaggi. 
+      // È il provider (il Tabellone) a decidere se accettare o rifiutare le offerte!
       for (var channel in activeChannels) {
         if (channel != webSocket) {
           channel.sink.add(message);

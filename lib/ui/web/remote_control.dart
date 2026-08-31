@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 class RemoteControlScreen extends StatefulWidget {
   const RemoteControlScreen({super.key});
@@ -20,10 +21,13 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   bool isRevealMode = false;
   int revealedTeamsCount = 0;
 
-  // Dati Countdown
   bool isTimerVisible = false;
   int timerSeconds = 0;
   bool isTimerRunning = false;
+  
+  // --- NUOVA VARIABILE PER SAPERE SE LO STREAMING È ATTIVO ---
+  bool isStreamingActive = false;
+  
   Timer? _pollingTimer;
 
   Color selectedTeamColor = Colors.white;
@@ -31,22 +35,22 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   final TextEditingController eventNameCtrl = TextEditingController();
   final TextEditingController newTeamNameCtrl = TextEditingController();
   final TextEditingController newGameNameCtrl = TextEditingController();
-  
   final TextEditingController timerMinCtrl = TextEditingController(text: "5");
   final TextEditingController timerSecCtrl = TextEditingController(text: "0");
 
   Map<int, TextEditingController> scoreCtrls = {};
   Map<int, TextEditingController> partialCtrls = {};
+  
+  Map<int, String> savedScores = {};
+  Map<int, String> savedPartials = {};
 
   @override
   void initState() {
     super.initState();
     fetchState();
-    // Interroga il server ogni secondo per mantenere sincronizzato il timer sul telefono
     _pollingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (isTimerVisible || isTimerRunning) {
-        fetchState(silent: true);
-      }
+      // Aggiorniamo sempre se c'è un timer O se c'è uno stream in corso (per far apparire il bottone di stop)
+      if (isTimerVisible || isTimerRunning || isStreamingActive) fetchState(silent: true);
     });
   }
 
@@ -73,23 +77,44 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
           timerSeconds = data['timerSeconds'] ?? 0;
           isTimerRunning = data['isTimerRunning'] ?? false;
           
+          // --- LEGGE LO STATO DELLO STREAMING DAL SERVER ---
+          isStreamingActive = data['isStreamingActive'] ?? false;
+          
           if (!silent) {
             eventName = data['eventName'];
             eventNameCtrl.text = eventName;
-            for (var t in teams) {
-              int id = t['id'];
-              if (!scoreCtrls.containsKey(id)) scoreCtrls[id] = TextEditingController();
-              if (!partialCtrls.containsKey(id)) partialCtrls[id] = TextEditingController();
-            }
           }
           
           if (activePage != 'totals') {
             int? pageIndex = int.tryParse(activePage);
-            if (pageIndex != null && games.any((g) => g['id'] == pageIndex)) {
-              currentGameIndex = pageIndex;
-            }
+            if (pageIndex != null && games.any((g) => g['id'] == pageIndex)) currentGameIndex = pageIndex;
           } else if (games.isNotEmpty && !games.any((g) => g['id'] == currentGameIndex)) {
             currentGameIndex = games.first['id'];
+          }
+
+          if (activePage != 'totals') {
+            var currentGame = games.firstWhere((g) => g['id'] == currentGameIndex, orElse: () => null);
+            if (currentGame != null) {
+              var scores = currentGame['scores'] ?? {};
+              var partials = currentGame['partials'] ?? {};
+
+              for (var t in teams) {
+                int id = t['id'];
+                if (!scoreCtrls.containsKey(id)) scoreCtrls[id] = TextEditingController();
+                if (!partialCtrls.containsKey(id)) partialCtrls[id] = TextEditingController();
+
+                String sScore = (scores[id.toString()] ?? 0).toString();
+                String sPartial = (partials[id.toString()] ?? '').toString();
+
+                savedScores[id] = sScore;
+                savedPartials[id] = sPartial;
+
+                if (!silent) {
+                  scoreCtrls[id]!.text = sScore;
+                  partialCtrls[id]!.text = sPartial;
+                }
+              }
+            }
           }
         });
       }
@@ -100,12 +125,39 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
     final url = Uri.parse('${Uri.base.origin}$endpoint');
     try {
       await http.post(url);
-      if (!endpoint.contains('timer/start') && !endpoint.contains('timer/stop')) {
+      if (!endpoint.contains('timer/start') && !endpoint.contains('timer/stop') && !endpoint.contains('navigate')) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Azione eseguita!'), duration: Duration(milliseconds: 300)));
       }
       await Future.delayed(const Duration(milliseconds: 300));
       fetchState();
     } catch (e) {}
+  }
+
+  Future<void> saveAll() async {
+    if (activePage == 'totals') return;
+
+    List<Future> futures = [];
+    for (var t in teams) {
+      int id = t['id'];
+      
+      String currentScore = scoreCtrls[id]?.text ?? "0";
+      if (currentScore.isEmpty) currentScore = "0";
+      if (currentScore != savedScores[id]) {
+        futures.add(http.post(Uri.parse('${Uri.base.origin}/api/score?game=$currentGameIndex&team=$id&points=$currentScore')));
+      }
+      
+      String currentPartial = partialCtrls[id]?.text ?? "";
+      if (currentPartial != savedPartials[id]) {
+        String encodedVal = Uri.encodeComponent(currentPartial);
+        futures.add(http.post(Uri.parse('${Uri.base.origin}/api/partial?game=$currentGameIndex&team=$id&value=$encodedVal')));
+      }
+    }
+
+    if (futures.isNotEmpty) {
+      await Future.wait(futures);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tutte le modifiche salvate!'), backgroundColor: Colors.green));
+      fetchState(); 
+    }
   }
 
   Future<void> confirmAndSend(String title, String content, String endpoint) async {
@@ -157,12 +209,59 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   @override
   Widget build(BuildContext context) {
     bool isTotalsView = activePage == 'totals';
+    bool hasUnsavedChanges = false;
+    if (!isTotalsView) {
+      for (var t in teams) {
+        int id = t['id'];
+        String cs = scoreCtrls[id]?.text ?? "0";
+        if (cs.isEmpty) cs = "0";
+        if (cs != savedScores[id]) hasUnsavedChanges = true;
+        if ((partialCtrls[id]?.text ?? "") != savedPartials[id]) hasUnsavedChanges = true;
+      }
+    }
 
     return Scaffold(
+      // --- QUI GESTIAMO IL BOTTONE DELLA VIDEOCAMERA / STOP ---
       appBar: AppBar(title: const Text('🕹️ Telecomando'), backgroundColor: Colors.blueGrey, actions: [
-        IconButton(icon: const Icon(Icons.videocam), onPressed: () => Navigator.pushNamed(context, '/stream')),
+        isStreamingActive 
+        ? IconButton(
+            icon: const Icon(Icons.videocam_off, color: Colors.redAccent),
+            tooltip: 'Forza chiusura Diretta',
+            onPressed: () => confirmAndSend('🛑 Stop Streaming', 'Forzare la chiusura dello streaming video attivo?', '/api/stream/stop')
+          )
+        : IconButton(
+            icon: const Icon(Icons.videocam, color: Colors.amberAccent), 
+            tooltip: 'Avvia Diretta Video',
+            onPressed: () async {
+              final url = Uri.parse('${Uri.base.origin}/stream_broadcaster.html');
+              if (await canLaunchUrl(url)) {
+                await launchUrl(url, mode: LaunchMode.externalApplication);
+              }
+            }
+          ),
         IconButton(icon: const Icon(Icons.refresh), onPressed: fetchState)
       ]),
+      bottomNavigationBar: isTotalsView ? null : Container(
+        padding: const EdgeInsets.all(16),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, -5))],
+        ),
+        child: ElevatedButton.icon(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: hasUnsavedChanges ? Colors.green : Colors.grey.shade400,
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(vertical: 20),
+            minimumSize: const Size(double.infinity, 60),
+          ),
+          icon: Icon(hasUnsavedChanges ? Icons.save : Icons.check_circle, size: 28),
+          label: Text(
+            hasUnsavedChanges ? 'SALVA TUTTE LE MODIFICHE' : 'TUTTO SALVATO', 
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, letterSpacing: 1)
+          ),
+          onPressed: hasUnsavedChanges ? saveAll : null,
+        ),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -188,7 +287,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
           ),
           const Divider(height: 30, thickness: 2),
 
-          // --- SEZIONE COUNTDOWN ---
           Card(
             color: Colors.amber.shade50,
             shape: RoundedRectangleBorder(side: const BorderSide(color: Colors.orange, width: 2), borderRadius: BorderRadius.circular(10)),
@@ -197,7 +295,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
               child: Column(
                 children: [
                   SwitchListTile(
-                    title: const Text('⏳ MOSTRA COUNTDOWN A SCHERMO', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepOrange)),
+                    title: const Text('⏳ MOSTRA COUNTDOWN', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepOrange)),
                     subtitle: const Text('Nasconde la classifica e mostra il timer.'),
                     value: isTimerVisible,
                     activeColor: Colors.deepOrange,
@@ -250,7 +348,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
           ),
           const Divider(height: 30, thickness: 2),
 
-          // --- MODALITÀ ANNUNCIO ---
           if (teams.isNotEmpty) ...[
             Card(
               color: Colors.purple.shade50,
@@ -298,8 +395,7 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
             onChanged: (val) {
               setState(() {
                 currentGameIndex = val!;
-                for (var controller in scoreCtrls.values) controller.clear();
-                for (var controller in partialCtrls.values) controller.clear();
+                fetchState(); 
               });
               sendCommand('/api/navigate?page=$val');
             },
@@ -311,6 +407,11 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
             bool hasUsedJolly = team['hasUsedJolly'] == true;
             Color teamColor = Colors.white;
             try { teamColor = Color(int.parse(team['colorHex'].substring(1), radix: 16) + 0xFF000000); } catch (e) {}
+
+            String currentScore = scoreCtrls[teamId]?.text ?? "0";
+            if (currentScore.isEmpty) currentScore = "0";
+            bool isScoreSaved = currentScore == savedScores[teamId];
+            bool isPartialSaved = (partialCtrls[teamId]?.text ?? "") == savedPartials[teamId];
 
             return Card(
               color: teamColor.withOpacity(0.15), 
@@ -343,28 +444,48 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                     const SizedBox(height: 10),
                     Row(
                       children: [
-                        Expanded(child: TextField(controller: scoreCtrls[teamId], readOnly: isTotalsView, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: 'Punti', border: const OutlineInputBorder(), filled: true, fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white))),
-                        const SizedBox(width: 10),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15)),
-                          onPressed: isTotalsView ? null : () {
-                            String pts = scoreCtrls[teamId]!.text.isEmpty ? "0" : scoreCtrls[teamId]!.text;
-                            sendCommand('/api/score?game=$currentGameIndex&team=$teamId&points=$pts');
-                          }, 
-                          child: const Text('Salva Punti')
-                        )
+                        Expanded(
+                          child: TextField(
+                            controller: scoreCtrls[teamId], 
+                            readOnly: isTotalsView, 
+                            keyboardType: TextInputType.number, 
+                            onChanged: (val) => setState(() {}),
+                            style: TextStyle(
+                              color: isScoreSaved ? Colors.black : Colors.grey.shade600,
+                              fontWeight: isScoreSaved ? FontWeight.normal : FontWeight.bold,
+                              fontStyle: isScoreSaved ? FontStyle.normal : FontStyle.italic
+                            ),
+                            decoration: InputDecoration(
+                              labelText: 'Punti', 
+                              border: const OutlineInputBorder(), 
+                              filled: true, 
+                              fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white
+                            )
+                          )
+                        ),
                       ],
                     ),
                     const SizedBox(height: 10),
                     Row(
                       children: [
-                        Expanded(child: TextField(controller: partialCtrls[teamId], readOnly: isTotalsView, decoration: InputDecoration(labelText: 'Misura / Note libere', border: const OutlineInputBorder(), filled: true, fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white))),
-                        const SizedBox(width: 10),
-                        ElevatedButton(
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.blue, foregroundColor: Colors.white, padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15)),
-                          onPressed: isTotalsView ? null : () => sendCommand('/api/partial?game=$currentGameIndex&team=$teamId&value=${partialCtrls[teamId]!.text}'), 
-                          child: const Text('Salva Misura')
-                        )
+                        Expanded(
+                          child: TextField(
+                            controller: partialCtrls[teamId], 
+                            readOnly: isTotalsView, 
+                            onChanged: (val) => setState(() {}),
+                            style: TextStyle(
+                              color: isPartialSaved ? Colors.black : Colors.grey.shade600,
+                              fontWeight: isPartialSaved ? FontWeight.normal : FontWeight.bold,
+                              fontStyle: isPartialSaved ? FontStyle.normal : FontStyle.italic
+                            ),
+                            decoration: InputDecoration(
+                              labelText: 'Misura / Note libere', 
+                              border: const OutlineInputBorder(), 
+                              filled: true, 
+                              fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white
+                            )
+                          )
+                        ),
                       ],
                     )
                   ],

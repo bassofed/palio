@@ -2,6 +2,11 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:async'; // Aggiunto per il Timer
 import 'package:flutter/material.dart';
+
+// --- IMPORT AGGIUNTI PER IL WEBRTC ---
+import 'package:flutter_webrtc/flutter_webrtc.dart';
+import 'package:web_socket_channel/io.dart';
+
 import '../models/team.dart';
 import '../models/game.dart';
 
@@ -23,6 +28,139 @@ class MatchProvider extends ChangeNotifier {
   Timer? _countdownTimer;
 
   final String _saveFileName = 'scoreboard_backup.json';
+
+  // ====================================================
+  // --- MOTORE WEBRTC INTEGRATO ---
+  // ====================================================
+  final RTCVideoRenderer renderer = RTCVideoRenderer();
+  RTCPeerConnection? _peerConnection;
+  IOWebSocketChannel? _signalingChannel;
+  final List<RTCIceCandidate> _candidateBuffer = []; 
+  bool isRendererReady = false;
+
+  Future<void> initWebRTC() async {
+    await renderer.initialize();
+    isRendererReady = true;
+    _connectSignaling();
+    notifyListeners();
+  }
+
+  void _connectSignaling() {
+    final customClient = HttpClient()
+      ..badCertificateCallback = (X509Certificate cert, String host, int port) => true;
+
+    WebSocket.connect('wss://127.0.0.1:8080/ws', customClient: customClient).then((ws) {
+      _signalingChannel = IOWebSocketChannel(ws);
+      _signalingChannel!.stream.listen(_handleSignalingMessage);
+    }).catchError((e) {
+      print("⚠️ Errore WebSocket WebRTC: $e");
+    });
+  }
+
+  // --- NUOVA FUNZIONE: FORZA LO STOP DEL VIDEO ---
+  void forceStopStream() {
+    print("🛑 FORZATURA STOP STREAMING MANUALE");
+    _peerConnection?.close();
+    _peerConnection = null;
+    renderer.srcObject = null;
+    _candidateBuffer.clear();
+    isStreamingActive = false;
+    
+    // Invia il segnale di stop sul websocket così i telefoni (Broadcaster) si scollegano
+    _signalingChannel?.sink.add(jsonEncode({'stop': true}));
+    notifyListeners();
+  }
+
+  Future<void> _handleSignalingMessage(dynamic message) async {
+    try {
+      final data = jsonDecode(message);
+
+      if (data['stop'] == true) {
+        _peerConnection?.close();
+        _peerConnection = null;
+        renderer.srcObject = null;
+        _candidateBuffer.clear();
+        isStreamingActive = false;
+        notifyListeners();
+        return; 
+      }
+
+      if (data['offer'] != null) {
+        // --- BLOCCO DI SICUREZZA: SE GIÀ IN ONDA, IGNORA! ---
+        if (isStreamingActive) {
+          print("⚠️ Stream già attivo! Rifiuto la connessione del secondo dispositivo.");
+          return;
+        }
+
+        await _createPeerConnection();
+        var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
+        await _peerConnection!.setRemoteDescription(offer);
+        
+        var answer = await _peerConnection!.createAnswer();
+        await _peerConnection!.setLocalDescription(answer);
+        
+        _signalingChannel?.sink.add(jsonEncode({'answer': answer.toMap()}));
+
+        for (var cand in _candidateBuffer) {
+          await _peerConnection!.addCandidate(cand);
+        }
+        _candidateBuffer.clear();
+        
+        isStreamingActive = true;
+        notifyListeners();
+      } 
+      else if (data['candidate'] != null) {
+        var candidateMap = data['candidate'];
+        var candidate = RTCIceCandidate(
+            candidateMap['candidate'], candidateMap['sdpMid'], candidateMap['sdpMLineIndex']);
+        
+        if (_peerConnection != null) {
+          await _peerConnection!.addCandidate(candidate);
+        } else {
+          _candidateBuffer.add(candidate);
+        }
+      }
+    } catch (e) {
+      print("❌ Errore WebRTC: $e");
+    }
+  }
+
+  Future<void> _createPeerConnection() async {
+    if (_peerConnection != null) return;
+    print("⚙️ Creazione connessione WebRTC...");
+
+    Map<String, dynamic> configuration = {
+      "iceServers": [{"url": "stun:stun.l.google.com:19302"}]
+    };
+    _peerConnection = await createPeerConnection(configuration);
+
+    // --- NUOVI LOG PER DIAGNOSTICARE IL PROBLEMA ---
+    _peerConnection!.onIceConnectionState = (RTCIceConnectionState state) {
+      print("🧊 Stato Rete Video: ${state.name}");
+      if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        print("❌ ERRORE CRITICO: I fotogrammi video non riescono a passare (Firewall o Rete).");
+      }
+    };
+
+    _peerConnection!.onAddStream = (MediaStream stream) {
+      print("🎥 Flusso Video in arrivo! Tracce trovate: ${stream.getVideoTracks().length}");
+      renderer.srcObject = stream;
+      notifyListeners();
+    };
+
+    _peerConnection!.onTrack = (RTCTrackEvent event) {
+      print("🎥 Traccia in arrivo: ${event.track.kind}");
+      if (event.track.kind == 'video' && event.streams.isNotEmpty) {
+        renderer.srcObject = event.streams[0];
+        notifyListeners();
+      }
+    };
+
+    _peerConnection!.onIceCandidate = (RTCIceCandidate candidate) {
+      _signalingChannel?.sink.add(jsonEncode({'candidate': candidate.toMap()}));
+    };
+  }
+  // ====================================================
 
   Future<void> loadFromFile() async {
     try {
@@ -91,7 +229,7 @@ class MatchProvider extends ChangeNotifier {
       _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
         if (timerSeconds > 0) {
           timerSeconds--;
-          notifyListeners(); // Aggiorna solo UI, non salviamo su disco ogni singolo secondo per non usurare il drive
+          notifyListeners(); // Aggiorna solo UI
         } else {
           stopTimer();
         }
@@ -112,11 +250,6 @@ class MatchProvider extends ChangeNotifier {
     _autoSave();
   }
   // ---------------------------
-
-  void setStreamingActive(bool value) {
-    isStreamingActive = value;
-    notifyListeners();
-  }
 
   void toggleRevealMode(bool enable) {
     isRevealMode = enable;
