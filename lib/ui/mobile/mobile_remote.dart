@@ -96,17 +96,21 @@ class _MobileRemoteScreenState extends State<MobileRemoteScreen> {
           timerSeconds = data['timerSeconds'] ?? 0;
           isTimerRunning = data['isTimerRunning'] ?? false;
           
-          // --- LEGGE LO STATO DELLO STREAMING DAL SERVER ---
           isStreamingActive = data['isStreamingActive'] ?? false;
           
           String activePage = data['currentPage'];
           int? parsedPage = int.tryParse(activePage);
           
+          // --- 1. RILEVIAMO SE IL GIOCO È CAMBIATO ---
+          int? newGameId = lastGameId;
           if (parsedPage != null && games.any((g) => g['id'] == parsedPage)) {
-            lastGameId = parsedPage;
+            newGameId = parsedPage;
           } else if (lastGameId == null && games.isNotEmpty) {
-            lastGameId = games.first['id'];
+            newGameId = games.first['id'];
           }
+
+          bool gameChanged = newGameId != lastGameId;
+          lastGameId = newGameId;
 
           if (lastGameId != null) {
             var currentGame = games.firstWhere((g) => g['id'] == lastGameId, orElse: () => null);
@@ -122,13 +126,27 @@ class _MobileRemoteScreenState extends State<MobileRemoteScreen> {
                 String sScore = (scores[id.toString()] ?? 0).toString();
                 String sPartial = (partials[id.toString()] ?? '').toString();
 
-                savedScores[id] = sScore;
-                savedPartials[id] = sPartial;
+                // --- 2. LOGICA INTELLIGENTE DI AGGIORNAMENTO TESTI ---
+                // Dobbiamo aggiornare i campi di testo se:
+                // - Non è silenzioso (prima connessione)
+                // - Il gioco è cambiato da un altro dispositivo
+                // - L'utente non sta digitando nulla di nuovo (il testo locale combacia con il vecchio testo salvato)
+                
+                String currentScoreInBox = scoreCtrls[id]!.text;
+                if (currentScoreInBox.isEmpty) currentScoreInBox = "0";
+                
+                bool isUserTypingScore = currentScoreInBox != (savedScores[id] ?? "0");
+                bool isUserTypingPartial = partialCtrls[id]!.text != (savedPartials[id] ?? "");
 
-                if (!silent) {
+                if (!silent || gameChanged || !isUserTypingScore) {
                   scoreCtrls[id]!.text = sScore;
+                }
+                if (!silent || gameChanged || !isUserTypingPartial) {
                   partialCtrls[id]!.text = sPartial;
                 }
+
+                savedScores[id] = sScore;
+                savedPartials[id] = sPartial;
               }
             }
           }
