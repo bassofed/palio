@@ -25,7 +25,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
   int timerSeconds = 0;
   bool isTimerRunning = false;
   
-  // --- NUOVA VARIABILE PER SAPERE SE LO STREAMING È ATTIVO ---
   bool isStreamingActive = false;
   
   Timer? _pollingTimer;
@@ -49,7 +48,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
     super.initState();
     fetchState();
     _pollingTimer = Timer.periodic(const Duration(seconds: 1), (_) {
-      // Aggiorniamo sempre se c'è un timer O se c'è uno stream in corso (per far apparire il bottone di stop)
       if (isTimerVisible || isTimerRunning || isStreamingActive) fetchState(silent: true);
     });
   }
@@ -77,7 +75,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
           timerSeconds = data['timerSeconds'] ?? 0;
           isTimerRunning = data['isTimerRunning'] ?? false;
           
-          // --- LEGGE LO STATO DELLO STREAMING DAL SERVER ---
           isStreamingActive = data['isStreamingActive'] ?? false;
           
           if (!silent) {
@@ -206,6 +203,25 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
     return "$m:$s";
   }
 
+  // --- MODIFICATA: Calcola il punteggio in base alla vista attuale ---
+  int _getScoreForCurrentView(int teamId, bool isTotalsView) {
+    if (isTotalsView) {
+      int total = 0;
+      for (var g in games) {
+        if (g['scores'] != null && g['scores'][teamId.toString()] != null) {
+          total += (g['scores'][teamId.toString()] as num).toInt();
+        }
+      }
+      return total;
+    } else {
+      var currentGame = games.firstWhere((g) => g['id'] == currentGameIndex, orElse: () => null);
+      if (currentGame != null && currentGame['scores'] != null && currentGame['scores'][teamId.toString()] != null) {
+         return (currentGame['scores'][teamId.toString()] as num).toInt();
+      }
+      return 0;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     bool isTotalsView = activePage == 'totals';
@@ -220,9 +236,19 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
       }
     }
 
+    // --- MODIFICATA: L'anteprima si adatta a Totali O Gioco Corrente ---
+    List<Map<String, dynamic>> sortedTeams = [];
+    if (teams.isNotEmpty) {
+      sortedTeams = List.from(teams);
+      sortedTeams.sort((a, b) {
+        int scoreA = _getScoreForCurrentView(a['id'], isTotalsView);
+        int scoreB = _getScoreForCurrentView(b['id'], isTotalsView);
+        return scoreA.compareTo(scoreB);
+      });
+    }
+
     return Scaffold(
-      // --- QUI GESTIAMO IL BOTTONE DELLA VIDEOCAMERA / STOP ---
-      appBar: AppBar(title: const Text('🕹️ Telecomando'), backgroundColor: Colors.blueGrey, actions: [
+      appBar: AppBar(title: const Text('🕹️ Telecomando PC'), backgroundColor: Colors.blueGrey, actions: [
         isStreamingActive 
         ? IconButton(
             icon: const Icon(Icons.videocam_off, color: Colors.redAccent),
@@ -287,106 +313,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
           ),
           const Divider(height: 30, thickness: 2),
 
-          Card(
-            color: Colors.amber.shade50,
-            shape: RoundedRectangleBorder(side: const BorderSide(color: Colors.orange, width: 2), borderRadius: BorderRadius.circular(10)),
-            child: Padding(
-              padding: const EdgeInsets.all(12.0),
-              child: Column(
-                children: [
-                  SwitchListTile(
-                    title: const Text('⏳ MOSTRA COUNTDOWN', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepOrange)),
-                    subtitle: const Text('Nasconde la classifica e mostra il timer.'),
-                    value: isTimerVisible,
-                    activeColor: Colors.deepOrange,
-                    onChanged: (val) => sendCommand('/api/timer/visibility?show=$val'),
-                  ),
-                  const Divider(),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Text(formattedTimer, style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, fontFamily: 'Courier')),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
-                        icon: const Icon(Icons.play_arrow), label: const Text('Start'),
-                        onPressed: isTimerRunning ? null : () => sendCommand('/api/timer/start')
-                      ),
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
-                        icon: const Icon(Icons.stop), label: const Text('Stop'),
-                        onPressed: !isTimerRunning ? null : () => sendCommand('/api/timer/stop')
-                      ),
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(backgroundColor: Colors.grey, foregroundColor: Colors.white),
-                        icon: const Icon(Icons.refresh), label: const Text('Reset'),
-                        onPressed: () => sendCommand('/api/timer/reset')
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(child: TextField(controller: timerMinCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Minuti', isDense: true))),
-                      const SizedBox(width: 10),
-                      Expanded(child: TextField(controller: timerSecCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Secondi', isDense: true))),
-                      const SizedBox(width: 10),
-                      ElevatedButton(
-                        onPressed: () => sendCommand('/api/timer/set?m=${timerMinCtrl.text}&s=${timerSecCtrl.text}'),
-                        child: const Text('Imposta')
-                      )
-                    ],
-                  )
-                ],
-              ),
-            ),
-          ),
-          const Divider(height: 30, thickness: 2),
-
-          if (teams.isNotEmpty) ...[
-            Card(
-              color: Colors.purple.shade50,
-              shape: RoundedRectangleBorder(side: const BorderSide(color: Colors.purple, width: 2), borderRadius: BorderRadius.circular(10)),
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Column(
-                  children: [
-                    SwitchListTile(
-                      title: const Text('🎭 MODALITÀ ANNUNCIO', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
-                      subtitle: const Text('Riordina la classifica e oscura le squadre.'),
-                      value: isRevealMode,
-                      activeColor: Colors.purple,
-                      onChanged: (val) => sendCommand('/api/reveal/toggle?enable=$val'),
-                    ),
-                    if (isRevealMode)
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.black),
-                            icon: const Icon(Icons.visibility_off), label: const Text('Nascondi (-1)'),
-                            onPressed: () => sendCommand('/api/reveal/prev')
-                          ),
-                          Text('$revealedTeamsCount / ${teams.length}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                          ElevatedButton.icon(
-                            style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white),
-                            icon: const Icon(Icons.visibility), label: const Text('Rivela (+1)'),
-                            onPressed: () => sendCommand('/api/reveal/next')
-                          ),
-                        ],
-                      )
-                  ],
-                ),
-              ),
-            ),
-            const Divider(height: 30, thickness: 2),
-          ],
-
           Text(isTotalsView ? '🛑 MODIFICHE DISABILITATE NEI TOTALI' : '🎮 ASSEGNA PUNTI E PARZIALI', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18, color: isTotalsView ? Colors.red : Colors.black)),
           if (games.isNotEmpty) DropdownButton<int>(
             value: currentGameIndex,
@@ -400,99 +326,255 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
               sendCommand('/api/navigate?page=$val');
             },
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 15),
 
-          ...teams.map((team) {
-            int teamId = team['id'];
-            bool hasUsedJolly = team['hasUsedJolly'] == true;
-            Color teamColor = Colors.white;
-            try { teamColor = Color(int.parse(team['colorHex'].substring(1), radix: 16) + 0xFF000000); } catch (e) {}
+          if (teams.isNotEmpty)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: teams.map((team) {
+                  int teamId = team['id'];
+                  bool hasUsedJolly = team['hasUsedJolly'] == true;
+                  Color teamColor = Colors.white;
+                  try { teamColor = Color(int.parse(team['colorHex'].substring(1), radix: 16) + 0xFF000000); } catch (e) {}
 
-            String currentScore = scoreCtrls[teamId]?.text ?? "0";
-            if (currentScore.isEmpty) currentScore = "0";
-            bool isScoreSaved = currentScore == savedScores[teamId];
-            bool isPartialSaved = (partialCtrls[teamId]?.text ?? "") == savedPartials[teamId];
+                  String currentScore = scoreCtrls[teamId]?.text ?? "0";
+                  if (currentScore.isEmpty) currentScore = "0";
+                  bool isScoreSaved = currentScore == savedScores[teamId];
+                  bool isPartialSaved = (partialCtrls[teamId]?.text ?? "") == savedPartials[teamId];
 
-            return Card(
-              color: teamColor.withOpacity(0.15), 
-              shape: RoundedRectangleBorder(side: BorderSide(color: teamColor, width: 2), borderRadius: BorderRadius.circular(10)),
-              margin: const EdgeInsets.only(bottom: 15),
-              child: Padding(
-                padding: const EdgeInsets.all(12.0),
-                child: Column(
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Expanded(child: Text(team['name'], style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold))),
-                        Row(
+                  return Container(
+                    width: 160, 
+                    margin: const EdgeInsets.only(right: 12, bottom: 15),
+                    child: Card(
+                      color: teamColor.withOpacity(0.15), 
+                      shape: RoundedRectangleBorder(side: BorderSide(color: teamColor, width: 2), borderRadius: BorderRadius.circular(8)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(10.0), 
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Expanded(child: Text(team['name'], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
+                                IconButton(
+                                  icon: const Icon(Icons.delete, color: Colors.red, size: 20), 
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => confirmAndSend('Elimina Squadra', 'Vuoi eliminare ${team['name']}?', '/api/delete/team?id=$teamId')
+                                )
+                              ],
+                            ),
+                            const SizedBox(height: 4),
                             ElevatedButton(
-                              style: ElevatedButton.styleFrom(backgroundColor: hasUsedJolly ? Colors.grey : Colors.orange, foregroundColor: hasUsedJolly ? Colors.white70 : Colors.white), 
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: hasUsedJolly ? Colors.grey : Colors.orange, 
+                                foregroundColor: hasUsedJolly ? Colors.white70 : Colors.white,
+                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0) 
+                              ), 
                               onPressed: isTotalsView ? null : () {
-                                    if (hasUsedJolly) confirmAndSend('❌ ANNULLA JOLLY', 'Vuoi annullare l\'uso del Jolly?', '/api/jolly/revoke?team=$teamId');
+                                    if (hasUsedJolly) confirmAndSend('❌ ANNULLA', 'Vuoi annullare l\'uso del Jolly?', '/api/jolly/revoke?team=$teamId');
                                     else confirmAndSend('🌟 GIOCA JOLLY', 'Giocare il Jolly per questa squadra?', '/api/jolly?game=$currentGameIndex&team=$teamId');
                                 }, 
-                              child: Text(hasUsedJolly ? 'Jolly Usato' : '🌟 Jolly')
+                              child: Text(hasUsedJolly ? 'Usato' : '🌟 Jolly', style: const TextStyle(fontSize: 13))
                             ),
-                            const SizedBox(width: 8),
-                            IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () => confirmAndSend('Elimina Squadra', 'Vuoi eliminare ${team['name']}?', '/api/delete/team?id=$teamId'))
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: scoreCtrls[teamId], 
+                              readOnly: isTotalsView, 
+                              keyboardType: TextInputType.number, 
+                              onChanged: (val) => setState(() {}),
+                              style: TextStyle(
+                                color: isScoreSaved ? Colors.black : Colors.grey.shade600,
+                                fontWeight: isScoreSaved ? FontWeight.normal : FontWeight.bold,
+                                fontStyle: isScoreSaved ? FontStyle.normal : FontStyle.italic
+                              ),
+                              decoration: InputDecoration(
+                                labelText: 'Punti', 
+                                isDense: true, 
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                border: const OutlineInputBorder(), 
+                                filled: true, 
+                                fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white
+                              )
+                            ),
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: partialCtrls[teamId], 
+                              readOnly: isTotalsView, 
+                              onChanged: (val) => setState(() {}),
+                              style: TextStyle(
+                                color: isPartialSaved ? Colors.black : Colors.grey.shade600,
+                                fontWeight: isPartialSaved ? FontWeight.normal : FontWeight.bold,
+                                fontStyle: isPartialSaved ? FontStyle.normal : FontStyle.italic
+                              ),
+                              decoration: InputDecoration(
+                                labelText: 'Note', 
+                                isDense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                border: const OutlineInputBorder(), 
+                                filled: true, 
+                                fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white
+                              )
+                            )
                           ],
                         ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+
+          const Divider(height: 40, thickness: 2),
+
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Card(
+                  color: Colors.amber.shade50,
+                  shape: RoundedRectangleBorder(side: const BorderSide(color: Colors.orange, width: 2), borderRadius: BorderRadius.circular(10)),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12.0),
+                    child: Column(
+                      children: [
+                        SwitchListTile(
+                          title: const Text('⏳ MOSTRA COUNTDOWN', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.deepOrange)),
+                          subtitle: const Text('Nasconde la classifica e mostra il timer.'),
+                          value: isTimerVisible,
+                          activeColor: Colors.deepOrange,
+                          onChanged: (val) => sendCommand('/api/timer/visibility?show=$val'),
+                        ),
+                        const Divider(),
+                        Text(formattedTimer, style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, fontFamily: 'Courier')),
+                        const SizedBox(height: 10),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                              icon: const Icon(Icons.play_arrow), label: const Text('Start'),
+                              onPressed: isTimerRunning ? null : () => sendCommand('/api/timer/start')
+                            ),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+                              icon: const Icon(Icons.stop), label: const Text('Stop'),
+                              onPressed: !isTimerRunning ? null : () => sendCommand('/api/timer/stop')
+                            ),
+                            ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.grey, foregroundColor: Colors.white),
+                              icon: const Icon(Icons.refresh), label: const Text('Reset'),
+                              onPressed: () => sendCommand('/api/timer/reset')
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(child: TextField(controller: timerMinCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Minuti', isDense: true))),
+                            const SizedBox(width: 10),
+                            Expanded(child: TextField(controller: timerSecCtrl, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Secondi', isDense: true))),
+                            const SizedBox(width: 10),
+                            ElevatedButton(
+                              onPressed: () => sendCommand('/api/timer/set?m=${timerMinCtrl.text}&s=${timerSecCtrl.text}'),
+                              child: const Text('Imposta')
+                            )
+                          ],
+                        )
                       ],
                     ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: scoreCtrls[teamId], 
-                            readOnly: isTotalsView, 
-                            keyboardType: TextInputType.number, 
-                            onChanged: (val) => setState(() {}),
-                            style: TextStyle(
-                              color: isScoreSaved ? Colors.black : Colors.grey.shade600,
-                              fontWeight: isScoreSaved ? FontWeight.normal : FontWeight.bold,
-                              fontStyle: isScoreSaved ? FontStyle.normal : FontStyle.italic
-                            ),
-                            decoration: InputDecoration(
-                              labelText: 'Punti', 
-                              border: const OutlineInputBorder(), 
-                              filled: true, 
-                              fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white
-                            )
-                          )
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: partialCtrls[teamId], 
-                            readOnly: isTotalsView, 
-                            onChanged: (val) => setState(() {}),
-                            style: TextStyle(
-                              color: isPartialSaved ? Colors.black : Colors.grey.shade600,
-                              fontWeight: isPartialSaved ? FontWeight.normal : FontWeight.bold,
-                              fontStyle: isPartialSaved ? FontStyle.normal : FontStyle.italic
-                            ),
-                            decoration: InputDecoration(
-                              labelText: 'Misura / Note libere', 
-                              border: const OutlineInputBorder(), 
-                              filled: true, 
-                              fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white
-                            )
-                          )
-                        ),
-                      ],
-                    )
-                  ],
+                  ),
                 ),
               ),
-            );
-          }),
+              const SizedBox(width: 16),
+              
+              if (teams.isNotEmpty) 
+                Expanded(
+                  child: Card(
+                    color: Colors.purple.shade50,
+                    shape: RoundedRectangleBorder(side: const BorderSide(color: Colors.purple, width: 2), borderRadius: BorderRadius.circular(10)),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          SwitchListTile(
+                            title: const Text('🎭 MODALITÀ ANNUNCIO', style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
+                            subtitle: const Text('Riordina la classifica e oscura le squadre sul tabellone.'),
+                            value: isRevealMode,
+                            activeColor: Colors.purple,
+                            onChanged: (val) => sendCommand('/api/reveal/toggle?enable=$val'),
+                          ),
+                          if (isRevealMode) ...[
+                            const SizedBox(height: 10),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                              children: [
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.black),
+                                  icon: const Icon(Icons.visibility_off), label: const Text('Nascondi (-1)'),
+                                  onPressed: () => sendCommand('/api/reveal/prev')
+                                ),
+                                Text('$revealedTeamsCount / ${teams.length}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                                ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(backgroundColor: Colors.purple, foregroundColor: Colors.white),
+                                  icon: const Icon(Icons.visibility), label: const Text('Rivela (+1)'),
+                                  onPressed: () => sendCommand('/api/reveal/next')
+                                ),
+                              ],
+                            ),
+                            const Divider(height: 20),
+                            const Text("Anteprima Annunciatore:", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.purple)),
+                            const SizedBox(height: 8),
+                            Column(
+                              children: List.generate(sortedTeams.length, (index) {
+                                var team = sortedTeams[index];
+                                int rank = sortedTeams.length - index;
+                                int score = _getScoreForCurrentView(team['id'], isTotalsView);
+                                bool isRevealed = index < revealedTeamsCount;
+                                
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 5),
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: isRevealed ? Colors.white : Colors.grey.shade300,
+                                    border: Border.all(color: isRevealed ? Colors.green : Colors.grey),
+                                    borderRadius: BorderRadius.circular(5)
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text("$rank° - ${team['name']}", style: TextStyle(
+                                        fontWeight: isRevealed ? FontWeight.bold : FontWeight.normal,
+                                        color: isRevealed ? Colors.black : Colors.grey.shade600
+                                      )),
+                                      Row(
+                                        children: [
+                                          Text("$score pt", style: TextStyle(fontWeight: FontWeight.bold, color: isRevealed ? Colors.blue.shade800 : Colors.grey)),
+                                          const SizedBox(width: 10),
+                                          Icon(
+                                            isRevealed ? Icons.visibility : Icons.visibility_off, 
+                                            color: isRevealed ? Colors.green : Colors.grey,
+                                            size: 18,
+                                          )
+                                        ],
+                                      )
+                                    ],
+                                  ),
+                                );
+                              }),
+                            )
+                          ]
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
 
           const Divider(height: 40, thickness: 2),
 
