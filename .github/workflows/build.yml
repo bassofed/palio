@@ -112,12 +112,51 @@ jobs:
 
 
   # ==========================================
-  # JOB 3: PUBBLICAZIONE RELEASE SU GITHUB
+  # JOB 3: COMPILAZIONE ANDROID (NUOVO)
+  # ==========================================
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Scarica il codice repository
+        uses: actions/checkout@v4
+
+      # Per Android è necessario configurare Java
+      - name: Configura Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Installa Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Scarica dipendenze Flutter
+        run: flutter pub get
+
+      - name: Compila l'App Android (APK)
+        run: flutter build apk --release
+
+      - name: Rinomina l'APK
+        run: mv build/app/outputs/flutter-apk/app-release.apk Arbitro_Mobile_Android.apk
+
+      - name: Carica l'Artefatto Temporaneo
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: Arbitro_Mobile_Android.apk
+          retention-days: 1
+
+
+  # ==========================================
+  # JOB 4: PUBBLICAZIONE RELEASE SU GITHUB
   # ==========================================
   create-release:
-    needs: [build-linux, build-windows] # Aspetta che i primi due abbiano finito
+    needs: [build-linux, build-windows, build-android] # Aspetta che TUTTI E TRE abbiano finito
     runs-on: ubuntu-latest
-    # Si avvia SOLO se abbiamo pushato un Tag (es. v1.0)
+    # Si avvia SOLO se abbiamo pushato un Tag (es. v1.0.0)
     if: startsWith(github.ref, 'refs/tags/') 
     
     steps:
@@ -130,6 +169,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-zip
+
+      - name: Scarica APK Android
+        uses: actions/download-artifact@v4
+        with:
+          name: android-apk
           
       - name: Crea la Release Pubblica
         uses: softprops/action-gh-release@v2
@@ -137,6 +181,7 @@ jobs:
           files: |
             Tabellone_Linux.zip
             Tabellone_Windows.zip
-          generate_release_notes: true # Genera automaticamente un riassunto delle modifiche
+            Arbitro_Mobile_Android.apk
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
