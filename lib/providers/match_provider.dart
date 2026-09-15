@@ -65,7 +65,7 @@ class MatchProvider extends ChangeNotifier {
     renderer.srcObject = null;
     _candidateBuffer.clear();
     isStreamingActive = false;
-    
+
     // Invia il segnale di stop sul websocket così i telefoni (Broadcaster) si scollegano
     _signalingChannel?.sink.add(jsonEncode({'stop': true}));
     notifyListeners();
@@ -95,17 +95,17 @@ class MatchProvider extends ChangeNotifier {
         await _createPeerConnection();
         var offer = RTCSessionDescription(data['offer']['sdp'], data['offer']['type']);
         await _peerConnection!.setRemoteDescription(offer);
-        
+
         var answer = await _peerConnection!.createAnswer();
         await _peerConnection!.setLocalDescription(answer);
-        
+
         _signalingChannel?.sink.add(jsonEncode({'answer': answer.toMap()}));
 
         for (var cand in _candidateBuffer) {
           await _peerConnection!.addCandidate(cand);
         }
         _candidateBuffer.clear();
-        
+
         isStreamingActive = true;
         notifyListeners();
       } 
@@ -113,7 +113,7 @@ class MatchProvider extends ChangeNotifier {
         var candidateMap = data['candidate'];
         var candidate = RTCIceCandidate(
             candidateMap['candidate'], candidateMap['sdpMid'], candidateMap['sdpMLineIndex']);
-        
+
         if (_peerConnection != null) {
           await _peerConnection!.addCandidate(candidate);
         } else {
@@ -134,7 +134,6 @@ class MatchProvider extends ChangeNotifier {
     };
     _peerConnection = await createPeerConnection(configuration);
 
-    // --- NUOVI LOG PER DIAGNOSTICARE IL PROBLEMA ---
     _peerConnection!.onIceConnectionState = (RTCIceConnectionState state) {
       print("🧊 Stato Rete Video: ${state.name}");
       if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
@@ -168,17 +167,17 @@ class MatchProvider extends ChangeNotifier {
       if (await file.exists()) {
         final content = await file.readAsString();
         final data = jsonDecode(content);
-        
+
         eventName = data['eventName'] ?? 'GRANDE EVENTO 2026';
         currentPage = data['currentPage'] ?? 'totals';
         isRevealMode = data['isRevealMode'] ?? false;
         revealedTeamsCount = data['revealedTeamsCount'] ?? 0;
-        
+
         isTimerVisible = data['isTimerVisible'] ?? false;
         timerSeconds = data['timerSeconds'] ?? 300;
         initialTimerSeconds = data['initialTimerSeconds'] ?? 300;
         isTimerRunning = false; // Il timer parte sempre fermo al riavvio
-        
+
         if (data['teams'] != null) {
           teams = (data['teams'] as List).map((t) => Team.fromJson(t)).toList();
         }
@@ -193,6 +192,7 @@ class MatchProvider extends ChangeNotifier {
   }
 
   void _autoSave() {
+    notifyListeners(); // <-- Spostato in cima per forzare subito il ridisegno grafico
     try {
       final data = {
         'eventName': eventName,
@@ -206,7 +206,6 @@ class MatchProvider extends ChangeNotifier {
         'games': games.map((g) => g.toJson()).toList(),
       };
       File(_saveFileName).writeAsString(jsonEncode(data));
-      notifyListeners(); 
     } catch (e) {}
   }
 
@@ -273,79 +272,67 @@ class MatchProvider extends ChangeNotifier {
   }
 
   void addGame(String name) {
-    final newGame = Game(name: name);
-    for (int i = 0; i < teams.length; i++) {
-      newGame.scores[i] = 0;
-      newGame.partials[i] = "";
-      newGame.activeJollies[i] = false;
+    int newId = games.isEmpty ? 1 : games.last.id + 1;
+    final newGame = Game(id: newId, name: name);
+    for (var team in teams) {
+      newGame.scores[team.id.toString()] = 0; 
+      newGame.partials[team.id.toString()] = "";
+      newGame.participations[team.id.toString()] = true;
     }
     games.add(newGame);
     _autoSave();
   }
 
-  void addTeam(String name, String colorHex) {
-    teams.add(Team(name: name, colorHex: colorHex));
-    int newIndex = teams.length - 1;
+  void addTeam(String name, String color) {
+    int newId = teams.isEmpty ? 1 : teams.last.id + 1;
+    final newTeam = Team(id: newId, name: name, colorHex: color);
+    teams.add(newTeam);
+
+    String newIndexStr = newId.toString(); 
     for (var game in games) {
-      game.scores[newIndex] = 0;
-      game.partials[newIndex] = "";
-      game.activeJollies[newIndex] = false;
+      game.scores[newIndexStr] = 0;
+      game.partials[newIndexStr] = "";
+      game.participations[newIndexStr] = true;
     }
     _autoSave();
   }
 
-  void removeGame(int index) {
-    if (index >= 0 && index < games.length) {
+  void removeGame(int id) {
+    int index = games.indexWhere((g) => g.id == id);
+    if (index != -1) {
       games.removeAt(index);
+      
       bool pageChanged = false;
-      if (currentPage == index.toString()) {
+      if (currentPage == id.toString()) {
         currentPage = 'totals';
         pageChanged = true;
-      } else {
-        int? curr = int.tryParse(currentPage);
-        if (curr != null && curr > index) {
-          currentPage = (curr - 1).toString();
-          pageChanged = true;
-        }
       }
       if (pageChanged && isRevealMode) revealedTeamsCount = 0;
       _autoSave();
     }
   }
 
-  void removeTeam(int index) {
-    if (index >= 0 && index < teams.length) {
-      teams.removeAt(index);
-      for (var game in games) {
-        var newScores = <int, int>{};
-        var newPartials = <int, String>{};
-        var newJollies = <int, bool>{};
-        for (int i = 0; i <= teams.length; i++) {
-          if (i == index) continue;
-          int newKey = i > index ? i - 1 : i;
-          if (game.scores.containsKey(i)) newScores[newKey] = game.scores[i]!;
-          if (game.partials.containsKey(i)) newPartials[newKey] = game.partials[i]!;
-          if (game.activeJollies.containsKey(i)) newJollies[newKey] = game.activeJollies[i]!;
-        }
-        game.scores = newScores;
-        game.partials = newPartials;
-        game.activeJollies = newJollies;
-      }
-      if (revealedTeamsCount > teams.length) revealedTeamsCount = teams.length;
-      _autoSave();
+  void removeTeam(int id) {
+    teams.removeWhere((t) => t.id == id);
+    String idStr = id.toString();
+    for (var game in games) {
+      game.scores.remove(idStr);
+      game.partials.remove(idStr);
+      game.participations.remove(idStr);
+      game.activeJollies.remove(id); // activeJollies uses int ID as key
     }
+    _autoSave();
   }
 
-  void resetGameScores(int index) {
-    if (index >= 0 && index < games.length) {
-      for (int i = 0; i < teams.length; i++) {
-        games[index].scores[i] = 0;
-        games[index].partials[i] = "";
-        if (games[index].activeJollies[i] == true) {
-          teams[i].hasUsedJolly = false;
-        }
-        games[index].activeJollies[i] = false;
+  void resetGameScores(int gameId) {
+    int index = games.indexWhere((g) => g.id == gameId);
+    if (index != -1) {
+      for (var team in teams) {
+        String idStr = team.id.toString();
+        games[index].scores[idStr] = 0;
+        games[index].partials[idStr] = "";
       }
+      games[index].activeJollies.clear();
       _autoSave();
     }
   }
@@ -364,32 +351,52 @@ class MatchProvider extends ChangeNotifier {
     _autoSave();
   }
 
-  void activateJolly(int gameIndex, int teamIndex) {
-    if (teamIndex < teams.length && !teams[teamIndex].hasUsedJolly) {
-      games[gameIndex].activeJollies[teamIndex] = true;
+  void activateJolly(int gameId, int teamId) {
+    final gameIndex = games.indexWhere((g) => g.id == gameId);
+    final teamIndex = teams.indexWhere((t) => t.id == teamId);
+    
+    if (teamIndex != -1 && gameIndex != -1 && !teams[teamIndex].hasUsedJolly) {
+      games[gameIndex].activeJollies[teamId] = true;
       teams[teamIndex].hasUsedJolly = true;
       _autoSave();
     }
   }
 
-  void revokeJolly(int teamIndex) {
-    if (teamIndex < teams.length) {
+  void revokeJolly(int teamId) {
+    final teamIndex = teams.indexWhere((t) => t.id == teamId);
+    if (teamIndex != -1) {
       teams[teamIndex].hasUsedJolly = false;
       for (var game in games) {
-        game.activeJollies[teamIndex] = false;
+        game.activeJollies[teamId] = false;
       }
       _autoSave();
     }
   }
 
-  void updateScore(int gameIndex, int teamIndex, int points) {
-    games[gameIndex].scores[teamIndex] = points;
-    _autoSave();
+  void setParticipation(int gameId, int teamId, bool isParticipating) {
+    final gameIndex = games.indexWhere((g) => g.id == gameId); 
+    print('📡 [setParticipation] Aggiornamento partecipazione: Game $gameId, Team $teamId, Partecipante: $isParticipating');
+    
+    if (gameIndex != -1) {
+      games[gameIndex].participations[teamId.toString()] = isParticipating;
+      _autoSave();
+    }
   }
 
-  void updatePartial(int gameIndex, int teamIndex, String partialValue) {
-    games[gameIndex].partials[teamIndex] = partialValue;
-    _autoSave();
+  void updateScore(int gameId, int teamId, int points) {
+    final gameIndex = games.indexWhere((g) => g.id == gameId);
+    if (gameIndex != -1) {
+      games[gameIndex].scores[teamId.toString()] = points; 
+      _autoSave();
+    }
+  }
+
+  void updatePartial(int gameId, int teamId, String partialValue) {
+    final gameIndex = games.indexWhere((g) => g.id == gameId);
+    if (gameIndex != -1) {
+      games[gameIndex].partials[teamId.toString()] = partialValue; 
+      _autoSave();
+    }
   }
 
   void navigateTo(String page) {
@@ -400,7 +407,11 @@ class MatchProvider extends ChangeNotifier {
     }
   }
 
-  int getTotalScore(int teamIndex) {
-    return games.fold(0, (sum, game) => sum + (game.scores[teamIndex] ?? 0));
+  int getTotalScore(int teamId) { 
+    String teamIdStr = teamId.toString();
+    return games.fold(0, (sum, game) {
+      int score = (game.scores[teamIdStr] as num?)?.toInt() ?? 0;
+      return sum + score;
+    });
   }
 }

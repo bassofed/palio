@@ -66,5 +66,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Questa app necessita dell'accesso alla fotocamera per trasmettere il video in streaming al tabellone.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Questa app necessita del microfono per lo streaming video.</string>
 </dict>
 </plist>

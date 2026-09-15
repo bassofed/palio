@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
@@ -40,25 +41,36 @@ class _ScoreboardAppState extends State<ScoreboardApp> {
     Game? currentGame;
 
     if (!isTotals) {
-      int? gameIndex = int.tryParse(state.currentPage);
-      if (gameIndex != null && gameIndex >= 0 && gameIndex < state.games.length) {
-        currentGame = state.games[gameIndex];
-        subtitle = currentGame.name.toUpperCase();
+      int? gameId = int.tryParse(state.currentPage);
+      if (gameId != null) {
+        // Cerchiamo il gioco per ID univoco, non per posizione nell'array!
+        final index = state.games.indexWhere((g) => g.id == gameId);
+        if (index != -1) {
+          currentGame = state.games[index];
+          subtitle = currentGame.name.toUpperCase();
+        }
       }
     }
 
-    // --- CALCOLO VINCITORE E CLASSIFICA ---
+    // --- LOGICA DI ORDINAMENTO CORRETTA (USA TEAM ID, NON INDEX) ---
     List<int> sortedIndices = List.generate(state.teams.length, (i) => i);
     if (state.teams.isNotEmpty) {
       sortedIndices.sort((a, b) {
-        int scoreA = isTotals ? state.getTotalScore(a) : (currentGame?.scores[a] ?? 0);
-        int scoreB = isTotals ? state.getTotalScore(b) : (currentGame?.scores[b] ?? 0);
+        final teamA = state.teams[a];
+        final teamB = state.teams[b];
+        
+        int scoreA = isTotals 
+            ? state.getTotalScore(teamA.id) 
+            : ((currentGame?.scores[teamA.id.toString()] as num?)?.toInt() ?? 0);
+            
+        int scoreB = isTotals 
+            ? state.getTotalScore(teamB.id) 
+            : ((currentGame?.scores[teamB.id.toString()] as num?)?.toInt() ?? 0);
+            
         return scoreA.compareTo(scoreB);
       });
     }
 
-    // L'effetto si attiva SOLO nei Totali (isTotals == true) 
-    // e quando tutte le squadre sono rivelate.
     bool isWinnerRevealed = isTotals && state.isRevealMode && state.teams.isNotEmpty && state.revealedTeamsCount == state.teams.length;
 
     if (isWinnerRevealed && !_hasFiredConfetti) {
@@ -69,12 +81,11 @@ class _ScoreboardAppState extends State<ScoreboardApp> {
       _confettiController.stop();
     }
 
-    // I coriandoli ora usano il colore della contrada vincente (con un po' di bianco)
     List<Color> confettiColors = [Colors.white];
     if (isWinnerRevealed && state.teams.isNotEmpty) {
       try {
         Color winnerColor = Color(int.parse(state.teams[sortedIndices.last].colorHex.substring(1), radix: 16) + 0xFF000000);
-        confettiColors = [winnerColor, winnerColor, Colors.white]; // Doppia dose del colore di fazione!
+        confettiColors = [winnerColor, winnerColor, Colors.white]; 
       } catch (e) {}
     }
 
@@ -114,33 +125,45 @@ class _ScoreboardAppState extends State<ScoreboardApp> {
         for (int i = 0; i < sortedIndices.length; i++) {
           int originalIndex = sortedIndices[i];
           final team = state.teams[originalIndex];
-          int score = isTotals ? state.getTotalScore(originalIndex) : (currentGame?.scores[originalIndex] ?? 0);
-          bool showJolly = isTotals ? team.hasUsedJolly : (currentGame?.activeJollies[originalIndex] ?? false);
+          
+          // --- ESTRAZIONE DATI CORRETTA TRAMITE TEAM.ID ---
+          int score = isTotals 
+              ? state.getTotalScore(team.id) 
+              : ((currentGame?.scores[team.id.toString()] as num?)?.toInt() ?? 0);
+              
+          bool showJolly = isTotals 
+              ? team.hasUsedJolly 
+              : (currentGame?.activeJollies[team.id] ?? false);
+          
+          bool isParticipating = true;
+          if (!isTotals) {
+            isParticipating = currentGame?.participations[team.id.toString()] ?? true;
+          }
+
           String? partial;
           if (!isTotals) {
-            partial = currentGame?.partials[originalIndex];
+            partial = currentGame?.partials[team.id.toString()];
             if (partial == null || partial.isEmpty) partial = null;
           }
 
           int rank = state.teams.length - i;
-          // Segnamo come "vincitore" la carta solo se siamo nei totali
           bool isWinner = isTotals && rank == 1;
 
           Widget cardContent;
           if (state.isRevealMode) {
             if (i < state.revealedTeamsCount) {
-              cardContent = _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, isWinner: isWinnerRevealed && isWinner);
+              cardContent = _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, isWinner: isWinnerRevealed && isWinner, isParticipating: isParticipating);
             } else {
               cardContent = _buildObscuredCard(rank);
             }
           } else {
-            cardContent = _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, isWinner: false);
+            cardContent = _buildTeamCard(team.name, team.colorHex, score, partial, showJolly, isWinner: false, isParticipating: isParticipating);
           }
 
           teamCardWidgets.add(
             Expanded(
               child: AnimatedOpacity(
-                opacity: isWinnerRevealed ? (isWinner ? 1.0 : 0.3) : 1.0,
+                opacity: !isParticipating ? 0.3 : (isWinnerRevealed ? (isWinner ? 1.0 : 0.3) : 1.0),
                 duration: const Duration(milliseconds: 1000),
                 curve: Curves.easeInOut,
                 child: AnimatedScale(
@@ -242,7 +265,7 @@ class _ScoreboardAppState extends State<ScoreboardApp> {
     );
   }
 
-  Widget _buildTeamCard(String name, String colorHex, int score, String? partial, bool showJolly, {bool isWinner = false}) {
+  Widget _buildTeamCard(String name, String colorHex, int score, String? partial, bool showJolly, {bool isWinner = false, bool isParticipating = true}) {
     Color teamColor = Colors.white;
     try { teamColor = Color(int.parse(colorHex.substring(1), radix: 16) + 0xFF000000); } catch (e) {}
 
@@ -252,15 +275,13 @@ class _ScoreboardAppState extends State<ScoreboardApp> {
       decoration: BoxDecoration(
         color: Colors.black.withOpacity(0.4),
         borderRadius: BorderRadius.circular(30),
-        // Il bordo rimane del colore della fazione, ma diventa più spesso
         border: Border.all(
           color: teamColor.withOpacity(0.8), 
           width: isWinner ? 8 : 4
         ),
         boxShadow: [
-          // Il bagliore esplode usando il colore puro della contrada!
           if (isWinner) BoxShadow(color: teamColor.withOpacity(0.6), blurRadius: 60, spreadRadius: 15),
-          if (!isWinner) BoxShadow(color: teamColor.withOpacity(0.3), blurRadius: 30, spreadRadius: 5)
+          if (!isWinner && isParticipating) BoxShadow(color: teamColor.withOpacity(0.3), blurRadius: 30, spreadRadius: 5)
         ]
       ),
       child: Column(
@@ -270,9 +291,16 @@ class _ScoreboardAppState extends State<ScoreboardApp> {
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Il testo rimane del colore della contrada
                 Text(name.toUpperCase(), style: TextStyle(fontSize: 50, color: teamColor, fontWeight: FontWeight.bold, letterSpacing: 2)),
-                if (showJolly)
+              ],
+            ),
+          ),
+
+          FittedBox(
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (showJolly && isParticipating)
                   Container(
                     margin: const EdgeInsets.only(left: 15),
                     padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 5),
@@ -283,7 +311,7 @@ class _ScoreboardAppState extends State<ScoreboardApp> {
             ),
           ),
           
-          if (partial != null) ...[
+          if (partial != null && isParticipating) ...[
             const SizedBox(height: 10), 
             FittedBox(
               child: Container(
@@ -298,15 +326,20 @@ class _ScoreboardAppState extends State<ScoreboardApp> {
           
           Expanded(
             child: FittedBox(
-              child: TweenAnimationBuilder<int>(
-                tween: IntTween(begin: 0, end: score),
-                duration: const Duration(milliseconds: 1200), 
-                curve: Curves.easeOutCubic, 
-                builder: (context, value, child) {
-                  if (value == 0 && score != 0) return const SizedBox.shrink(); 
-                  return Text(value.toString(), style: const TextStyle(fontSize: 250, fontWeight: FontWeight.w900, color: Colors.white));
-                }
-              ),
+              child: isParticipating 
+                ? TweenAnimationBuilder<int>(
+                    tween: IntTween(begin: 0, end: score),
+                    duration: const Duration(milliseconds: 1200), 
+                    curve: Curves.easeOutCubic, 
+                    builder: (context, value, child) {
+                      //if (value == 0 && score != 0) return const SizedBox.shrink(); 
+                      return Text(
+                        value.toString().padLeft(2, ' '), 
+                        style: const TextStyle(fontSize: 250, fontWeight: FontWeight.w900, color: Colors.white, fontFeatures: [FontFeature.tabularFigures()])
+                      );
+                    }
+                  )
+                : const Text("-", style: TextStyle(fontSize: 250, fontWeight: FontWeight.w900, color: Colors.white54)),
             ),
           ),
         ],

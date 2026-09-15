@@ -203,7 +203,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
     return "$m:$s";
   }
 
-  // --- MODIFICATA: Calcola il punteggio in base alla vista attuale ---
   int _getScoreForCurrentView(int teamId, bool isTotalsView) {
     if (isTotalsView) {
       int total = 0;
@@ -236,7 +235,6 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
       }
     }
 
-    // --- MODIFICATA: L'anteprima si adatta a Totali O Gioco Corrente ---
     List<Map<String, dynamic>> sortedTeams = [];
     if (teams.isNotEmpty) {
       sortedTeams = List.from(teams);
@@ -344,82 +342,108 @@ class _RemoteControlScreenState extends State<RemoteControlScreen> {
                   bool isScoreSaved = currentScore == savedScores[teamId];
                   bool isPartialSaved = (partialCtrls[teamId]?.text ?? "") == savedPartials[teamId];
 
+                  // --- LOGICA PARTECIPAZIONE ---
+                  bool isParticipating = true;
+                  if (!isTotalsView) {
+                    var cGame = games.firstWhere((g) => g['id'] == currentGameIndex, orElse: () => null);
+                    if (cGame != null && cGame['participations'] != null) {
+                      isParticipating = cGame['participations'][teamId.toString()] ?? true;
+                    }
+                  }
+
                   return Container(
                     width: 160, 
                     margin: const EdgeInsets.only(right: 12, bottom: 15),
-                    child: Card(
-                      color: teamColor.withOpacity(0.15), 
-                      shape: RoundedRectangleBorder(side: BorderSide(color: teamColor, width: 2), borderRadius: BorderRadius.circular(8)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(10.0), 
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.stretch,
-                          children: [
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Expanded(child: Text(team['name'], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
-                                IconButton(
-                                  icon: const Icon(Icons.delete, color: Colors.red, size: 20), 
-                                  padding: EdgeInsets.zero,
-                                  constraints: const BoxConstraints(),
-                                  onPressed: () => confirmAndSend('Elimina Squadra', 'Vuoi eliminare ${team['name']}?', '/api/delete/team?id=$teamId')
+                    child: Opacity(
+                      opacity: isParticipating ? 1.0 : 0.5, // Oscura se non partecipa
+                      child: Card(
+                        color: teamColor.withOpacity(0.15), 
+                        shape: RoundedRectangleBorder(side: BorderSide(color: teamColor, width: 2), borderRadius: BorderRadius.circular(8)),
+                        child: Padding(
+                          padding: const EdgeInsets.all(10.0), 
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                children: [
+                                  Expanded(child: Text(team['name'], style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
+                                  if (!isTotalsView) // Pulsante di Partecipazione
+                                    InkWell(
+                                      onTap: () => confirmAndSend(
+                                        isParticipating ? 'Escludi Squadra' : 'Includi Squadra', 
+                                        isParticipating ? 'Escludere questa squadra dal gioco corrente?' : 'Riammettere la squadra?', 
+                                        '/api/participation?game=$currentGameIndex&team=$teamId&status=${!isParticipating}'
+                                      ),
+                                      child: Icon(
+                                        isParticipating ? Icons.check_circle : Icons.do_not_disturb_on, 
+                                        color: isParticipating ? Colors.green : Colors.grey, 
+                                        size: 22
+                                      ),
+                                    ),
+                                  if (isTotalsView) // Pulsante di Eliminazione (solo nei Totali)
+                                    IconButton(
+                                      icon: const Icon(Icons.delete, color: Colors.red, size: 20), 
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () => confirmAndSend('Elimina Squadra', 'Vuoi eliminare ${team['name']}?', '/api/delete/team?id=$teamId')
+                                    )
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: hasUsedJolly ? Colors.grey : Colors.orange, 
+                                  foregroundColor: hasUsedJolly ? Colors.white70 : Colors.white,
+                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0) 
+                                ), 
+                                onPressed: (isTotalsView || !isParticipating) ? null : () {
+                                      if (hasUsedJolly) confirmAndSend('❌ ANNULLA', 'Vuoi annullare l\'uso del Jolly?', '/api/jolly/revoke?team=$teamId');
+                                      else confirmAndSend('🌟 GIOCA JOLLY', 'Giocare il Jolly per questa squadra?', '/api/jolly?game=$currentGameIndex&team=$teamId');
+                                  }, 
+                                child: Text(hasUsedJolly ? 'Usato' : '🌟 Jolly', style: const TextStyle(fontSize: 13))
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: scoreCtrls[teamId], 
+                                readOnly: isTotalsView || !isParticipating, // Disabilita input se escluso
+                                keyboardType: TextInputType.number, 
+                                onChanged: (val) => setState(() {}),
+                                style: TextStyle(
+                                  color: isScoreSaved ? Colors.black : Colors.grey.shade600,
+                                  fontWeight: isScoreSaved ? FontWeight.normal : FontWeight.bold,
+                                  fontStyle: isScoreSaved ? FontStyle.normal : FontStyle.italic
+                                ),
+                                decoration: InputDecoration(
+                                  labelText: 'Punti', 
+                                  isDense: true, 
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                  border: const OutlineInputBorder(), 
+                                  filled: true, 
+                                  fillColor: (isTotalsView || !isParticipating) ? Colors.grey.shade300 : Colors.white
                                 )
-                              ],
-                            ),
-                            const SizedBox(height: 4),
-                            ElevatedButton(
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: hasUsedJolly ? Colors.grey : Colors.orange, 
-                                foregroundColor: hasUsedJolly ? Colors.white70 : Colors.white,
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 0) 
-                              ), 
-                              onPressed: isTotalsView ? null : () {
-                                    if (hasUsedJolly) confirmAndSend('❌ ANNULLA', 'Vuoi annullare l\'uso del Jolly?', '/api/jolly/revoke?team=$teamId');
-                                    else confirmAndSend('🌟 GIOCA JOLLY', 'Giocare il Jolly per questa squadra?', '/api/jolly?game=$currentGameIndex&team=$teamId');
-                                }, 
-                              child: Text(hasUsedJolly ? 'Usato' : '🌟 Jolly', style: const TextStyle(fontSize: 13))
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: scoreCtrls[teamId], 
-                              readOnly: isTotalsView, 
-                              keyboardType: TextInputType.number, 
-                              onChanged: (val) => setState(() {}),
-                              style: TextStyle(
-                                color: isScoreSaved ? Colors.black : Colors.grey.shade600,
-                                fontWeight: isScoreSaved ? FontWeight.normal : FontWeight.bold,
-                                fontStyle: isScoreSaved ? FontStyle.normal : FontStyle.italic
                               ),
-                              decoration: InputDecoration(
-                                labelText: 'Punti', 
-                                isDense: true, 
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                                border: const OutlineInputBorder(), 
-                                filled: true, 
-                                fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: partialCtrls[teamId], 
+                                readOnly: isTotalsView || !isParticipating, 
+                                onChanged: (val) => setState(() {}),
+                                style: TextStyle(
+                                  color: isPartialSaved ? Colors.black : Colors.grey.shade600,
+                                  fontWeight: isPartialSaved ? FontWeight.normal : FontWeight.bold,
+                                  fontStyle: isPartialSaved ? FontStyle.normal : FontStyle.italic
+                                ),
+                                decoration: InputDecoration(
+                                  labelText: 'Note', 
+                                  isDense: true,
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+                                  border: const OutlineInputBorder(), 
+                                  filled: true, 
+                                  fillColor: (isTotalsView || !isParticipating) ? Colors.grey.shade300 : Colors.white
+                                )
                               )
-                            ),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: partialCtrls[teamId], 
-                              readOnly: isTotalsView, 
-                              onChanged: (val) => setState(() {}),
-                              style: TextStyle(
-                                color: isPartialSaved ? Colors.black : Colors.grey.shade600,
-                                fontWeight: isPartialSaved ? FontWeight.normal : FontWeight.bold,
-                                fontStyle: isPartialSaved ? FontStyle.normal : FontStyle.italic
-                              ),
-                              decoration: InputDecoration(
-                                labelText: 'Note', 
-                                isDense: true,
-                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                                border: const OutlineInputBorder(), 
-                                filled: true, 
-                                fillColor: isTotalsView ? Colors.grey.shade300 : Colors.white
-                              )
-                            )
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     ),

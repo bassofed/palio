@@ -1,30 +1,46 @@
 class Game {
+  int id;
   String name;
-  Map<int, int> scores = {};
-  Map<int, String> partials = {};
-  Map<int, bool> activeJollies = {};
+  Map<String, dynamic> scores;
+  Map<String, dynamic> partials;
+  Map<int, bool> activeJollies;
+  Map<String, bool> participations; // <-- NUOVO: Registra chi partecipa
 
-  Game({required this.name});
-
-  Map<String, dynamic> toJson() => {
-    'name': name,
-    'scores': scores.map((key, value) => MapEntry(key.toString(), value)),
-    'partials': partials.map((key, value) => MapEntry(key.toString(), value)),
-    'activeJollies': activeJollies.map((key, value) => MapEntry(key.toString(), value)),
-  };
+  Game({
+    required this.id,
+    required this.name,
+    Map<String, dynamic>? scores,
+    Map<String, dynamic>? partials,
+    Map<int, bool>? activeJollies,
+    Map<String, bool>? participations,
+  })  : scores = scores ?? {},
+        partials = partials ?? {},
+        activeJollies = activeJollies ?? {},
+        participations = participations ?? {}; // Di default tutti partecipano
 
   factory Game.fromJson(Map<String, dynamic> json) {
-    var game = Game(name: json['name']);
-    
-    if (json['scores'] != null) {
-      game.scores = (json['scores'] as Map<String, dynamic>).map((k, v) => MapEntry(int.parse(k), v as int));
-    }
-    if (json['partials'] != null) {
-      game.partials = (json['partials'] as Map<String, dynamic>).map((k, v) => MapEntry(int.parse(k), v as String));
-    }
-    if (json['activeJollies'] != null) {
-      game.activeJollies = (json['activeJollies'] as Map<String, dynamic>).map((k, v) => MapEntry(int.parse(k), v as bool));
-    }
-    return game;
+    return Game(
+      id: json['id'],
+      name: json['name'],
+      scores: json['scores'] != null ? Map<String, dynamic>.from(json['scores']) : null,
+      partials: json['partials'] != null ? Map<String, dynamic>.from(json['partials']) : null,
+      activeJollies: json['activeJollies'] != null
+          ? (json['activeJollies'] as Map<String, dynamic>).map((k, v) => MapEntry(int.parse(k), v as bool))
+          : null,
+      participations: json['participations'] != null
+          ? Map<String, bool>.from(json['participations'])
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'scores': scores,
+      'partials': partials,
+      'activeJollies': activeJollies.map((k, v) => MapEntry(k.toString(), v)),
+      'participations': participations,
+    };
   }
 }

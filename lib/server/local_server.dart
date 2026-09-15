@@ -22,8 +22,39 @@ Middleware corsHeaders() {
 
 Future<void> startLocalServer(MatchProvider provider) async {
   final router = Router();
+  print('🟢 Inizializzazione del server locale con MatchProvider...');
 
   router.get('/api/state', (Request request) {
+    print('📡 [startLocalServer router.get(/api/state] Richiesta di stato ricevuta. Preparazione dei dati da inviare...');
+    print('📡 [startLocalServer router.get(/api/state] Dati attuali: EventName=${provider.eventName}, CurrentPage=${provider.currentPage}, IsRevealMode=${provider.isRevealMode}, RevealedTeamsCount=${provider.revealedTeamsCount}, IsStreamingActive=${provider.isStreamingActive}, IsTimerVisible=${provider.isTimerVisible}, TimerSeconds=${provider.timerSeconds}, IsTimerRunning=${provider.isTimerRunning}');
+    print('📡 [startLocalServer router.get(/api/state] Numero di squadre: ${provider.teams.length}, Numero di giochi: ${provider.games.length}');
+    print('📡 [startLocalServer router.get(/api/state] Squadre: ${provider.teams.map((t) => t.name).toList()}');
+    print('📡 [startLocalServer router.get(/api/state] Giochi: ${provider.games.map((g) => g.name).toList()}');
+    print('📡 [startLocalServer router.get(/api/state] Invio dei dati JSON al client...');
+    print('📡 [startLocalServer router.get(/api/state] Dati JSON: ${jsonEncode({
+      'eventName': provider.eventName,
+      'currentPage': provider.currentPage,
+      'isRevealMode': provider.isRevealMode, 
+      'revealedTeamsCount': provider.revealedTeamsCount, 
+      'isStreamingActive': provider.isStreamingActive, 
+      'isTimerVisible': provider.isTimerVisible,
+      'timerSeconds': provider.timerSeconds,
+      'isTimerRunning': provider.isTimerRunning,
+      'teams': provider.teams.map((t) => {
+        'id': t.id, 
+        'name': t.name, 
+        'colorHex': t.colorHex,
+        'hasUsedJolly': t.hasUsedJolly
+      }).toList(),
+      'games': provider.games.map((g) => {
+        'id': g.id, 
+        'name': g.name,
+        'scores': g.scores.map((k, v) => MapEntry(k.toString(), v)),
+        'partials': g.partials.map((k, v) => MapEntry(k.toString(), v)),
+        'participations': g.participations.map((k, v) => MapEntry(k.toString(), v)) 
+      }).toList(),
+    })}');
+
     final data = {
       'eventName': provider.eventName,
       'currentPage': provider.currentPage,
@@ -33,18 +64,21 @@ Future<void> startLocalServer(MatchProvider provider) async {
       'isTimerVisible': provider.isTimerVisible,
       'timerSeconds': provider.timerSeconds,
       'isTimerRunning': provider.isTimerRunning,
-      'teams': provider.teams.asMap().entries.map((e) => {
-        'id': e.key, 
-        'name': e.value.name, 
-        'colorHex': e.value.colorHex,
-        'hasUsedJolly': e.value.hasUsedJolly
+      
+      // --- CORREZIONE: Ora usiamo i VERI ID (t.id e g.id) e non l'indice dell'array ---
+      'teams': provider.teams.map((t) => {
+        'id': t.id, 
+        'name': t.name, 
+        'colorHex': t.colorHex,
+        'hasUsedJolly': t.hasUsedJolly
       }).toList(),
-      // --- MODIFICA: Ora il server invia anche i punteggi correnti al web ---
-      'games': provider.games.asMap().entries.map((e) => {
-        'id': e.key, 
-        'name': e.value.name,
-        'scores': e.value.scores.map((k, v) => MapEntry(k.toString(), v)),
-        'partials': e.value.partials.map((k, v) => MapEntry(k.toString(), v))
+      
+      'games': provider.games.map((g) => {
+        'id': g.id, 
+        'name': g.name,
+        'scores': g.scores.map((k, v) => MapEntry(k.toString(), v)),
+        'partials': g.partials.map((k, v) => MapEntry(k.toString(), v)),
+        'participations': g.participations.map((k, v) => MapEntry(k.toString(), v)) 
       }).toList(),
     };
     return Response.ok(jsonEncode(data), headers: {'Content-Type': 'application/json'});
@@ -140,6 +174,18 @@ Future<void> startLocalServer(MatchProvider provider) async {
     int tIdx = int.tryParse(request.url.queryParameters['team'] ?? '0') ?? 0;
     provider.updatePartial(gIdx, tIdx, request.url.queryParameters['value'] ?? '');
     return Response.ok('Parziale aggiornato');
+  });
+
+  // --- NUOVA API: GESTIONE PARTECIPAZIONE ---
+  router.post('/api/participation', (Request request) {
+    int? game = int.tryParse(request.url.queryParameters['game'] ?? '');
+    int? team = int.tryParse(request.url.queryParameters['team'] ?? '');
+    bool status = request.url.queryParameters['status'] == 'true';
+    print('📡 [startLocalServer router.post(/api/participation] Richiesta di aggiornamento partecipazione ricevuta. Game: $game, Team: $team, Status: $status');
+    if (game != null && team != null) {
+      provider.setParticipation(game, team, status);
+    }
+    return Response.ok('Stato partecipazione aggiornato');
   });
 
   router.post('/api/delete/game', (Request request) {
